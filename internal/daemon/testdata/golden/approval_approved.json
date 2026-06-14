@@ -1,0 +1,61 @@
+{
+  "steps": [
+    {
+      "method": "session.upsert",
+      "payload": {
+        "sessionId": "s1",
+        "status": "running",
+        "safeSummary": "agent running"
+      }
+    },
+    {
+      "method": "approval.request",
+      "background": true,
+      "payload": {
+        "approvalId": "s1:tool-1",
+        "sessionId": "s1",
+        "toolCallId": "tool-1",
+        "toolName": "bash",
+        "commandSummary": "git push origin main",
+        "risk": "medium",
+        "timeoutMillis": 5000
+      },
+      "expectDecision": {
+        "approvalId": "s1:tool-1",
+        "decision": "approved",
+        "reason": "looks safe"
+      }
+    },
+    {
+      "waitPendingApprovals": 1
+    },
+    {
+      "method": "approval.respond",
+      "payload": {
+        "approvalId": "s1:tool-1",
+        "decision": "approved",
+        "reason": "looks safe"
+      }
+    }
+  ],
+  "snapshot": {
+    "attention": "running",
+    "sessions": [
+      {
+        "id": "s1",
+        "status": "running",
+        "safeSummary": "agent running"
+      }
+    ],
+    "pendingApprovals": [],
+    "installedPets": [],
+    "catalogs": {},
+    "presentation": {
+      "stateId": "running",
+      "bubble": "Pi running: agent running",
+      "activeSessionIds": [
+        "s1"
+      ]
+    }
+  }
+}

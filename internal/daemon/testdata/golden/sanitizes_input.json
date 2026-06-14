@@ -1,0 +1,31 @@
+{
+  "steps": [
+    {
+      "method": "session.upsert",
+      "payload": {
+        "sessionId": "  s1  ",
+        "status": "bogus",
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "safeSummary": "  multiple   spaces\n\nand newlines  "
+      }
+    }
+  ],
+  "snapshot": {
+    "attention": "idle",
+    "sessions": [
+      {
+        "id": "s1",
+        "status": "idle",
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "safeSummary": "multiple spaces and newlines"
+      }
+    ],
+    "pendingApprovals": [],
+    "installedPets": [],
+    "catalogs": {},
+    "presentation": {
+      "stateId": "idle",
+      "activeSessionIds": []
+    }
+  }
+}

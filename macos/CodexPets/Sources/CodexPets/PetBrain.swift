@@ -115,12 +115,30 @@ enum PetMood: String, Equatable {
     case annoyed
 }
 
+enum PetDragDirection: Equatable {
+    case left
+    case right
+
+    init(horizontalDelta: CGFloat) {
+        self = horizontalDelta < 0 ? .left : .right
+    }
+
+    var stateID: String {
+        switch self {
+        case .left:
+            return "running-left"
+        case .right:
+            return "running-right"
+        }
+    }
+}
+
 enum PetSignal: Equatable {
     case idlePulse
     case mouseNear(distance: CGFloat)
     case mouseEntered
     case clicked(count: Int)
-    case dragged
+    case dragged(direction: PetDragDirection)
     case userInactive(seconds: TimeInterval)
     case userReturned
     case codexState(String)
@@ -131,6 +149,7 @@ enum PetSignal: Equatable {
 enum PetPlaybackMode: Equatable {
     case staticFrame(Int)
     case playOnce
+    case loop
     case loopFor(TimeInterval)
     case loopWithPause(active: TimeInterval, pause: ClosedRange<TimeInterval>)
 
@@ -139,6 +158,8 @@ enum PetPlaybackMode: Equatable {
         case let (.staticFrame(a), .staticFrame(b)):
             return a == b
         case (.playOnce, .playOnce):
+            return true
+        case (.loop, .loop):
             return true
         case let (.loopFor(a), .loopFor(b)):
             return abs(a - b) < 0.0001
@@ -175,29 +196,19 @@ final class PetBrain {
     private var runningStartedAt: TimeInterval?
     private var didSettleLongRunning = false
     private var lastReturnGreetingAt: TimeInterval?
-    private let dialogueEngine: DialogueEngine
-    private var dialogueHistory: DialogueHistory
-    private let dialogueHistoryStore: DialogueHistoryStore?
-    private let dialogueNowProvider: () -> TimeInterval
 
+    // Murmur text lives in the Go daemon (internal/petbrain); this brain
+    // only decides poses, moods, and pacing for the native renderer.
     init(
         mode: PetAttentionMode = .default,
         bubbleMode: PetBubbleMode = .all,
         reduceMotion: Bool = false,
-        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-        dialogueNow: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 },
-        dialogueEngine: DialogueEngine = DialogueEngine.petMurmurs(),
-        dialogueHistory: DialogueHistory = DialogueHistory(),
-        dialogueHistoryStore: DialogueHistoryStore? = nil
+        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.mode = mode
         self.bubbleMode = bubbleMode
         self.reduceMotion = reduceMotion
         self.now = now
-        self.dialogueNowProvider = dialogueNow
-        self.dialogueEngine = dialogueEngine
-        self.dialogueHistoryStore = dialogueHistoryStore
-        self.dialogueHistory = dialogueHistoryStore?.load() ?? dialogueHistory
     }
 
     func handle(_ signal: PetSignal) -> PetDecision? {
@@ -210,9 +221,8 @@ final class PetBrain {
             return handleMouseEntered()
         case let .clicked(count):
             return handleClick(count: count)
-        case .dragged:
-            let bubble = murmur(for: .drag, mood: .happy)
-            return decision(mood: .happy, stateID: "jumping", duration: 1.2, bubble: bubble, playback: .playOnce)
+        case let .dragged(direction):
+            return decision(mood: .happy, stateID: direction.stateID, duration: nil, bubble: nil, playback: .loop)
         case let .userInactive(seconds):
             guard seconds >= 8 * 60 else { return nil }
             activeCodexState = "idle"
@@ -228,16 +238,6 @@ final class PetBrain {
             reduceMotion = value
             return decisionForCurrentStateAfterMotionChange()
         }
-    }
-
-    func muteMurmurs(for seconds: TimeInterval) {
-        dialogueHistory.mute(for: seconds, now: dialogueNow())
-        persistDialogueHistory()
-    }
-
-    func muteMurmursForToday() {
-        dialogueHistory.muteForToday(now: dialogueNow())
-        persistDialogueHistory()
     }
 
     private func handleMouseNear(distance: CGFloat) -> PetDecision? {
@@ -257,8 +257,7 @@ final class PetBrain {
 
         nearSince = current
         startCooldown(.curious, for: 5)
-        let bubble = murmur(for: .mouseNear, mood: .curious)
-        return decision(mood: .curious, stateID: "waiting", duration: 1.8, bubble: bubble, playback: .playOnce)
+        return decision(mood: .curious, stateID: "waiting", duration: 1.8, bubble: nil, playback: .playOnce)
     }
 
     private func handleMouseEntered() -> PetDecision? {
@@ -277,15 +276,13 @@ final class PetBrain {
         if clickTimes.count >= 5, canUse(.annoyed) {
             clickTimes.removeAll()
             startCooldown(.annoyed, for: 60)
-            let bubble = murmur(for: .interactionSpamClick, mood: .annoyed)
-            return decision(mood: .annoyed, stateID: "failed", duration: 2.4, bubble: bubble, playback: .playOnce)
+            return decision(mood: .annoyed, stateID: "failed", duration: 2.4, bubble: nil, playback: .playOnce)
         }
 
         let isPetting = count >= 2
         guard isPetting || canUse(.happy) else { return nil }
         startCooldown(.happy, for: mode.clickHappyCooldown)
-        let bubble = murmur(for: .interactionClick, mood: .happy)
-        return decision(mood: .happy, stateID: isPetting ? "jumping" : "waving", duration: isPetting ? 1.4 : 1.2, bubble: bubble, playback: .playOnce)
+        return decision(mood: .happy, stateID: isPetting ? "jumping" : "waving", duration: isPetting ? 1.4 : 1.2, bubble: nil, playback: .playOnce)
     }
 
     private func handleUserReturned() -> PetDecision? {
@@ -296,34 +293,27 @@ final class PetBrain {
         guard mode != .focus, canUse(.happy) else { return nil }
         lastReturnGreetingAt = current
         startCooldown(.happy, for: mode.clickHappyCooldown)
-        let bubble = murmur(for: .userReturned, mood: .happy)
-        return decision(mood: .happy, stateID: "waving", duration: 1.4, bubble: bubble, playback: .playOnce)
+        return decision(mood: .happy, stateID: "waving", duration: 1.4, bubble: nil, playback: .playOnce)
     }
 
     private func handleCodexState(_ rawState: String) -> PetDecision? {
         let state = rawState.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let previousState = activeCodexState
         activeCodexState = state
 
         switch state {
         case "running", "running-left", "running-right":
             if runningStartedAt == nil { runningStartedAt = now() }
             didSettleLongRunning = false
-            let isNewTransition = previousState != state && !previousState.hasPrefix("running")
-            let bubble = isNewTransition ? murmur(for: .codexRunning, mood: .focused) : nil
-            return decision(mood: .focused, stateID: state, duration: nil, bubble: bubble, playback: reduceMotion ? .staticFrame(0) : .loopWithPause(active: 4, pause: 20...45))
+            return decision(mood: .focused, stateID: state, duration: nil, bubble: nil, playback: reduceMotion ? .staticFrame(0) : .loopWithPause(active: 4, pause: 20...45))
         case "waiting":
             runningStartedAt = nil
-            let bubble = previousState == state ? nil : murmur(for: .codexWaiting, mood: .waiting)
-            return decision(mood: .waiting, stateID: "waiting", duration: 3, bubble: bubble, playback: .playOnce)
+            return decision(mood: .waiting, stateID: "waiting", duration: 3, bubble: nil, playback: .playOnce)
         case "review":
             runningStartedAt = nil
-            let bubble = previousState == state ? nil : murmur(for: .codexReview, mood: .waiting)
-            return decision(mood: .waiting, stateID: "review", duration: 4, bubble: bubble, playback: .playOnce)
+            return decision(mood: .waiting, stateID: "review", duration: 4, bubble: nil, playback: .playOnce)
         case "failed":
             runningStartedAt = nil
-            let bubble = previousState == state ? nil : murmur(for: .codexFailed, mood: .sad)
-            return decision(mood: .sad, stateID: "failed", duration: 2.8, bubble: bubble, playback: .playOnce)
+            return decision(mood: .sad, stateID: "failed", duration: 2.8, bubble: nil, playback: .playOnce)
         case "waving":
             runningStartedAt = nil
             return decision(mood: .happy, stateID: "waving", duration: 1.4, bubble: nil, playback: .playOnce)
@@ -354,7 +344,7 @@ final class PetBrain {
                 mood: .happy,
                 stateID: "waving",
                 duration: 1.6,
-                bubble: murmur(for: .codexSuccess, mood: .happy),
+                bubble: nil,
                 playback: .playOnce
             )
         case "task.needs_user", "task.needs-user", "needs_user", "waiting":
@@ -364,7 +354,7 @@ final class PetBrain {
                 mood: .waiting,
                 stateID: "waiting",
                 duration: 3,
-                bubble: murmur(for: .codexWaiting, mood: .waiting),
+                bubble: nil,
                 playback: .playOnce
             )
         case "review":
@@ -374,7 +364,7 @@ final class PetBrain {
                 mood: .waiting,
                 stateID: "review",
                 duration: 4,
-                bubble: murmur(for: .codexReview, mood: .waiting),
+                bubble: nil,
                 playback: .playOnce
             )
         case "task.failed", "task.failure", "failed", "error":
@@ -384,7 +374,7 @@ final class PetBrain {
                 mood: .sad,
                 stateID: "failed",
                 duration: 2.8,
-                bubble: murmur(for: .codexFailed, mood: .sad),
+                bubble: nil,
                 playback: .playOnce
             )
         default:
@@ -408,8 +398,7 @@ final class PetBrain {
         {
             didSettleLongRunning = true
             activeCodexState = "waiting"
-            let bubble = murmur(for: .codexLongRunning, mood: .focused)
-            return decision(mood: .focused, stateID: "waiting", duration: nil, bubble: bubble, playback: .staticFrame(0))
+            return decision(mood: .focused, stateID: "waiting", duration: nil, bubble: nil, playback: .staticFrame(0))
         }
 
         guard mode != .focus, !reduceMotion else { return nil }
@@ -424,8 +413,7 @@ final class PetBrain {
 
         idleActionTimes.append(current)
         lastIdleActionAt = current
-        let bubble = isLateNight() ? murmur(for: .lateNight, mood: .sleepy) : murmur(for: .ambient, mood: .curious)
-        return decision(mood: .curious, stateID: "idle", duration: 0.9, bubble: bubble, playback: .playOnce)
+        return decision(mood: .curious, stateID: "idle", duration: 0.9, bubble: nil, playback: .playOnce)
     }
 
     private func decisionForCurrentStateAfterMotionChange() -> PetDecision {
@@ -441,40 +429,6 @@ final class PetBrain {
         default:
             return decision(mood: .calm, stateID: activeCodexState == "idle" ? "idle" : activeCodexState, duration: nil, bubble: nil, playback: .staticFrame(0))
         }
-    }
-
-    private func murmur(for event: PetMurmurEvent, mood: PetMood) -> String? {
-        if reduceMotion, !event.isImportantWorkflowEvent {
-            return nil
-        }
-        let settings = DialogueSettings(
-            mode: bubbleMode,
-            globalCooldownSeconds: (event.isImportantWorkflowEvent || event == .interactionSpamClick) ? 0 : nil,
-            allowLateNight: event == .lateNight
-        )
-        guard let line = dialogueEngine.maybeSpeak(
-            event: event,
-            mood: mood,
-            settings: settings,
-            history: &dialogueHistory
-        ) else {
-            return nil
-        }
-        persistDialogueHistory()
-        return line.text
-    }
-
-    private func dialogueNow() -> TimeInterval {
-        dialogueNowProvider()
-    }
-
-    private func persistDialogueHistory() {
-        dialogueHistoryStore?.save(dialogueHistory)
-    }
-
-    private func isLateNight() -> Bool {
-        let hour = Calendar.current.component(.hour, from: Date(timeIntervalSince1970: dialogueNow()))
-        return hour >= 22 || hour < 5
     }
 
     private func decision(

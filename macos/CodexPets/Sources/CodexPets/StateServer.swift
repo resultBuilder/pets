@@ -16,6 +16,13 @@ final class StateServer {
     private(set) var port: UInt16 = 7777
     let token: String
 
+    static var isDebugEnabled: Bool {
+        let value = ProcessInfo.processInfo.environment["CODEX_PETS_ENABLE_HTTP_STATE_API"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return value == "1" || value == "true" || value == "yes" || value == "on"
+    }
+
     init(
         runtimeRoot: URL,
         onState: @escaping StateHandler,
@@ -30,6 +37,8 @@ final class StateServer {
     }
 
     func start() {
+        guard Self.isDebugEnabled else { return }
+
         let requested = UInt16(ProcessInfo.processInfo.environment["CODEX_PETS_PORT"] ?? "7777") ?? 7777
         start(on: requested) { [weak self] success in
             guard let self, !success else { return }

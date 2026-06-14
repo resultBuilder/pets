@@ -1,0 +1,77 @@
+{
+  "steps": [
+    {
+      "method": "pets.installed.set",
+      "payload": {
+        "pets": [
+          {
+            "id": "petdex:boba",
+            "displayName": "Boba",
+            "source": "app",
+            "path": "/x/boba"
+          },
+          {
+            "id": "petdex:aqua-wisp",
+            "displayName": "Aqua Wisp",
+            "source": "app"
+          }
+        ]
+      }
+    },
+    {
+      "method": "pet.select",
+      "payload": {
+        "petId": "petdex:boba"
+      }
+    },
+    {
+      "method": "catalog.cache.set",
+      "payload": {
+        "provider": "petdex",
+        "updatedAt": "2026-01-02T03:04:05Z",
+        "pets": [
+          {
+            "id": "petdex:cat",
+            "displayName": "Cat",
+            "source": "petdex"
+          }
+        ]
+      }
+    }
+  ],
+  "snapshot": {
+    "attention": "idle",
+    "sessions": [],
+    "pendingApprovals": [],
+    "selectedPetId": "petdex:boba",
+    "installedPets": [
+      {
+        "id": "petdex:aqua-wisp",
+        "displayName": "Aqua Wisp",
+        "source": "app"
+      },
+      {
+        "id": "petdex:boba",
+        "displayName": "Boba",
+        "source": "app",
+        "path": "/x/boba"
+      }
+    ],
+    "catalogs": {
+      "petdex": {
+        "provider": "petdex",
+        "pets": [
+          {
+            "id": "petdex:cat",
+            "displayName": "Cat",
+            "source": "petdex"
+          }
+        ]
+      }
+    },
+    "presentation": {
+      "stateId": "idle",
+      "activeSessionIds": []
+    }
+  }
+}

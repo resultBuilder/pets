@@ -1,0 +1,84 @@
+{
+  "steps": [
+    {
+      "method": "tool.start",
+      "payload": {
+        "sessionId": "s1",
+        "toolCallId": "tool-1",
+        "toolName": "bash",
+        "safeSummary": "bash started"
+      }
+    },
+    {
+      "method": "tool.update",
+      "payload": {
+        "sessionId": "s1",
+        "toolCallId": "tool-1",
+        "toolName": "bash",
+        "safeSummary": "bash running"
+      }
+    },
+    {
+      "method": "tool.end",
+      "payload": {
+        "sessionId": "s1",
+        "toolCallId": "tool-1",
+        "toolName": "bash",
+        "state": "done",
+        "safeSummary": "bash done"
+      }
+    },
+    {
+      "method": "tool.start",
+      "payload": {
+        "sessionId": "s1",
+        "toolCallId": "tool-2",
+        "toolName": "edit"
+      }
+    },
+    {
+      "method": "tool.end",
+      "payload": {
+        "sessionId": "s1",
+        "toolCallId": "tool-2",
+        "toolName": "edit",
+        "state": "failed",
+        "safeSummary": "edit failed"
+      }
+    }
+  ],
+  "snapshot": {
+    "attention": "failed",
+    "sessions": [
+      {
+        "id": "s1",
+        "status": "failed",
+        "tools": [
+          {
+            "id": "tool-1",
+            "sessionId": "s1",
+            "name": "bash",
+            "state": "done",
+            "safeSummary": "bash done"
+          },
+          {
+            "id": "tool-2",
+            "sessionId": "s1",
+            "name": "edit",
+            "state": "failed",
+            "safeSummary": "edit failed"
+          }
+        ]
+      }
+    ],
+    "pendingApprovals": [],
+    "installedPets": [],
+    "catalogs": {},
+    "presentation": {
+      "stateId": "failed",
+      "bubble": "Pi failed: s1",
+      "autoClearSeconds": 8,
+      "activeSessionIds": []
+    }
+  }
+}

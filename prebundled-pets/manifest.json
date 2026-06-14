@@ -1,0 +1,97 @@
+{
+  "generatedAt": "2026-06-12T00:00:00.000Z",
+  "sourceManifest": "prebundled",
+  "pets": [
+    {
+      "source": "prebundled",
+      "slug": "boba",
+      "displayName": "Boba",
+      "description": "Animated Codex-compatible pet bundled with the browser.",
+      "kind": "creature",
+      "submittedBy": "railly",
+      "tags": ["prebundled"],
+      "spritesheetUrl": "pets/boba/spritesheet.webp",
+      "petJsonUrl": "pets/boba/pet.json",
+      "frameWidth": 192,
+      "frameHeight": 208
+    },
+    {
+      "source": "prebundled",
+      "slug": "cappy",
+      "displayName": "Cappy",
+      "description": "A cute coffee-loving capybara companion for calm focus sessions.",
+      "kind": "creature",
+      "submittedBy": "davidrichard1111",
+      "tags": ["prebundled"],
+      "spritesheetUrl": "pets/cappy/sprite.webp",
+      "petJsonUrl": "pets/cappy/pet.json",
+      "frameWidth": 192,
+      "frameHeight": 208
+    },
+    {
+      "source": "prebundled",
+      "slug": "pepe",
+      "displayName": "Pepe",
+      "description": "A compact Codex-style green frog pet in a plain blue shirt.",
+      "kind": "creature",
+      "submittedBy": "CodexPets",
+      "tags": ["prebundled"],
+      "spritesheetUrl": "pets/pepe/spritesheet.webp",
+      "petJsonUrl": "pets/pepe/pet.json",
+      "frameWidth": 192,
+      "frameHeight": 208
+    },
+    {
+      "source": "prebundled",
+      "slug": "pc-guy",
+      "displayName": "PC Guy",
+      "description": "Animated Codex-compatible pet bundled with the browser.",
+      "kind": "character",
+      "submittedBy": "c",
+      "tags": ["prebundled"],
+      "spritesheetUrl": "pets/pc-guy/sprite.webp",
+      "petJsonUrl": "pets/pc-guy/pet.json",
+      "frameWidth": 192,
+      "frameHeight": 208
+    },
+    {
+      "source": "prebundled",
+      "slug": "catfish",
+      "displayName": "Catfish",
+      "description": "A gray tabby cat-headed fish pet with a naturally fused fish body, rendered as a pixel-art Codex pet.",
+      "kind": "creature",
+      "submittedBy": "\u4e94\u5f00 \u4e94.",
+      "tags": ["prebundled"],
+      "spritesheetUrl": "pets/catfish/sprite.webp",
+      "petJsonUrl": "pets/catfish/pet.json",
+      "frameWidth": 192,
+      "frameHeight": 208
+    },
+    {
+      "source": "prebundled",
+      "slug": "paperclip",
+      "displayName": "Paperclip",
+      "description": "A tiny friendly office paperclip assistant for calm document-editing days.",
+      "kind": "object",
+      "submittedBy": "Vlad T.",
+      "tags": ["prebundled"],
+      "spritesheetUrl": "pets/paperclip/spritesheet.webp",
+      "petJsonUrl": "pets/paperclip/pet.json",
+      "frameWidth": 192,
+      "frameHeight": 208
+    },
+    {
+      "source": "prebundled",
+      "slug": "mallow",
+      "displayName": "Mallow",
+      "description": "A Codex digital pet based on the user cat: plush gray-and-white bicolor cat with gold eyes, pink nose, white bib and paws, gray mask, fluffy belly, and serious expression.",
+      "kind": "creature",
+      "submittedBy": "Aidil",
+      "tags": ["prebundled"],
+      "spritesheetUrl": "pets/mallow/spritesheet.webp",
+      "petJsonUrl": "pets/mallow/pet.json",
+      "frameWidth": 192,
+      "frameHeight": 208
+    }
+  ]
+}

@@ -12,6 +12,8 @@ final class PetOverlayController: NSObject {
     private var idlePulseTimer: Timer?
     private var bubbleClearTimer: Timer?
     private var wasCursorOverInteractive = false
+    private var isDraggingPet = false
+    private var activeDragDirection: PetDragDirection?
 
     private(set) var currentPet: PetPackage?
     private(set) var currentStateID = "idle"
@@ -23,6 +25,16 @@ final class PetOverlayController: NSObject {
     var attentionMode: PetAttentionMode { brain.mode }
     var bubbleMode: PetBubbleMode { brain.bubbleMode }
     var reduceMotion: Bool { brain.reduceMotion }
+    var currentBubbleText: String { rootView.bubbleText }
+    var petBrowserRequestedHandler: (() -> Void)?
+    var approvalDecisionHandler: ((String, String) -> Void)?
+    /// Reports pet interactions ("click"/"drag"/"mouseNear", click count) to
+    /// the daemon's brain; murmurs come back through the snapshot.
+    var interactionHandler: ((String, Int) -> Void)?
+    /// Requests a murmur mute (nil = rest of the day, otherwise seconds).
+    var muteRequestedHandler: ((TimeInterval?) -> Void)?
+    private var lastDragInteractionAt: TimeInterval = 0
+    var updateRequestedHandler: (() -> Void)?
 
     override init() {
         self.rootView = PetOverlayView(
@@ -35,8 +47,7 @@ final class PetOverlayController: NSObject {
             defer: false
         )
         self.brain = PetBrain(
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-            dialogueHistoryStore: DialogueHistoryStore.default()
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         )
         super.init()
 
@@ -55,17 +66,29 @@ final class PetOverlayController: NSObject {
         rootView.windowDragHandler = { [weak self] delta in
             self?.moveBy(delta)
         }
+        rootView.dragMovedHandler = { [weak self] delta in
+            self?.handleDrag(delta: delta)
+        }
+        rootView.dragEndedHandler = { [weak self] in
+            self?.isDraggingPet = false
+            self?.activeDragDirection = nil
+            self?.scheduleIdleReset(after: 0.8)
+            self?.updateMouseTransparencyAndProximity()
+        }
         rootView.clickHandler = { [weak self] count in
             self?.handleDirectSignal(.clicked(count: count))
         }
-        rootView.dragStartedHandler = { [weak self] in
-            self?.handleDirectSignal(.dragged)
-        }
-        rootView.dragEndedHandler = { [weak self] in
-            self?.scheduleIdleReset(after: 0.8)
+        rootView.rightClickHandler = { [weak self] in
+            self?.petBrowserRequestedHandler?()
         }
         rootView.bubbleActionHandler = { [weak self] in
             self?.dismissBubbleAndMute()
+        }
+        rootView.approvalDecisionHandler = { [weak self] approvalID, decision in
+            self?.approvalDecisionHandler?(approvalID, decision)
+        }
+        rootView.updateButtonHandler = { [weak self] in
+            self?.updateRequestedHandler?()
         }
 
         NotificationCenter.default.addObserver(
@@ -92,6 +115,7 @@ final class PetOverlayController: NSObject {
 
     func show() {
         panel.orderFrontRegardless()
+        panel.ignoresMouseEvents = currentPet == nil
         startInteractionPolling()
         scheduleIdlePulse()
     }
@@ -143,6 +167,49 @@ final class PetOverlayController: NSObject {
         }
     }
 
+    func setUpdateStatus(_ status: UpdateStatus) {
+        switch status {
+        case .idle, .checking:
+            rootView.updateButtonText = nil
+        case let .available(commits):
+            rootView.updateButtonText = commits > 0 ? "Update (\(commits))" : "Rebuild"
+        case let .updating(stage):
+            rootView.updateButtonText = stage
+        case let .failed(message):
+            rootView.updateButtonText = "Retry"
+            setBubble("Update failed: \(String(message.prefix(80)))", autoClearAfter: 8)
+        case .restarting:
+            rootView.updateButtonText = "Restarting…"
+        }
+        updateMouseTransparencyAndProximity()
+    }
+
+    func applyDaemonSnapshot(_ snapshot: DaemonSnapshot) {
+        let presentation = snapshot.presentationOrIdle
+        rootView.pendingApprovalID = snapshot.pendingApprovals.first { $0.state == "pending" }?.id
+        // A drag owns the pose: a snapshot arriving mid-drag must not stomp
+        // the directional run animation. Drag end restores the daemon state.
+        if isDraggingPet {
+            if let bubble = presentation.bubble {
+                setBubble(bubble, autoClearAfter: presentation.autoClearAfter)
+            }
+            return
+        }
+        let preserveAutoClearingBubble = presentation.stateId == "idle"
+            && presentation.bubble == nil
+            && hasAutoClearingBubble
+        if preserveAutoClearingBubble {
+            setState(presentation.stateId, preservingBubble: true)
+        } else {
+            setState(presentation.stateId)
+        }
+        if let bubble = presentation.bubble {
+            setBubble(bubble, autoClearAfter: presentation.autoClearAfter)
+        } else if presentation.stateId == "idle", !preserveAutoClearingBubble {
+            setBubble("", autoClearAfter: nil)
+        }
+    }
+
     func setEvent(type: String, label: String?, importance: PetEventImportance) {
         guard let decision = brain.handle(.codexEvent(type: type, label: label, importance: importance)) else { return }
         apply(decision)
@@ -155,14 +222,17 @@ final class PetOverlayController: NSObject {
 
         if let autoClearAfter, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             bubbleClearTimer = oneShotTimer(after: autoClearAfter) { [weak self] in
-                self?.rootView.bubbleText = ""
+                guard let self else { return }
+                self.rootView.bubbleText = ""
+                self.bubbleClearTimer = nil
+                self.updateMouseTransparencyAndProximity()
             }
         }
         updateMouseTransparencyAndProximity()
     }
 
     func muteMurmursForToday() {
-        brain.muteMurmursForToday()
+        muteRequestedHandler?(nil)
         setBubble("")
     }
 
@@ -211,23 +281,48 @@ final class PetOverlayController: NSObject {
     }
 
     private func handleDirectSignal(_ signal: PetSignal) {
+        forwardInteraction(signal)
         guard let decision = brain.handle(signal) else { return }
         apply(decision)
     }
 
+    /// The daemon's brain owns murmurs; the local brain only paces poses,
+    /// so interactions are mirrored over the socket.
+    private func forwardInteraction(_ signal: PetSignal) {
+        switch signal {
+        case let .clicked(count):
+            interactionHandler?("click", count)
+        case .dragged:
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastDragInteractionAt > 5 else { return }
+            lastDragInteractionAt = now
+            interactionHandler?("drag", 0)
+        case .mouseNear, .mouseEntered:
+            interactionHandler?("mouseNear", 0)
+        case .userReturned:
+            interactionHandler?("userReturned", 0)
+        default:
+            break
+        }
+    }
+
     private func dismissBubbleAndMute() {
         guard !rootView.bubbleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        brain.muteMurmurs(for: 3 * 60 * 60)
+        muteRequestedHandler?(3 * 60 * 60)
         setBubble("")
     }
 
-    private func apply(_ decision: PetDecision, resetOverride: TimeInterval? = nil) {
+    private func apply(
+        _ decision: PetDecision,
+        resetOverride: TimeInterval? = nil,
+        preserveExistingBubble: Bool = false
+    ) {
         guard currentPet != nil else { return }
         directSetState(decision.stateID, playback: decision.playback)
 
         if let bubble = decision.bubble {
             setBubble(bubble, autoClearAfter: decision.mood == .waiting ? 8 : 4)
-        } else if decision.mood == .focused || decision.mood == .calm {
+        } else if !preserveExistingBubble && (decision.mood == .focused || decision.mood == .calm) {
             setBubble("")
         }
 
@@ -272,7 +367,19 @@ final class PetOverlayController: NSObject {
     private func scheduleIdleReset(after delay: TimeInterval) {
         idleReset?.invalidate()
         idleReset = oneShotTimer(after: delay) { [weak self] in
-            self?.setState("idle")
+            self?.setState("idle", preservingBubble: true)
+        }
+    }
+
+    private var hasAutoClearingBubble: Bool {
+        bubbleClearTimer != nil && !rootView.bubbleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func setState(_ id: String, preservingBubble: Bool) {
+        if let decision = brain.handle(.codexState(id)) {
+            apply(decision, preserveExistingBubble: preservingBubble)
+        } else {
+            directSetState(id, playback: playbackMode(for: id, duration: nil))
         }
     }
 
@@ -311,6 +418,22 @@ final class PetOverlayController: NSObject {
         frame.origin.y -= delta.y
         panel.setFrame(frame, display: true)
         updateMouseTransparencyAndProximity()
+    }
+
+    private func handleDrag(delta: NSPoint) {
+        isDraggingPet = true
+        let direction: PetDragDirection
+        if abs(delta.x) >= 0.5 {
+            direction = PetDragDirection(horizontalDelta: delta.x)
+        } else if let activeDragDirection {
+            direction = activeDragDirection
+        } else {
+            direction = .right
+        }
+
+        guard activeDragDirection != direction || !currentStateID.hasPrefix("running") else { return }
+        activeDragDirection = direction
+        handleDirectSignal(.dragged(direction: direction))
     }
 
     private func applyCollectionBehavior() {
@@ -352,14 +475,12 @@ final class PetOverlayController: NSObject {
             return
         }
 
+        guard !isDraggingPet else { return }
+
         let screenPoint = NSEvent.mouseLocation
         let windowPoint = panel.convertPoint(fromScreen: screenPoint)
         let localPoint = rootView.convert(windowPoint, from: nil)
         let cursorOverInteractive = rootView.containsInteractivePoint(localPoint)
-
-        if panel.ignoresMouseEvents == cursorOverInteractive {
-            panel.ignoresMouseEvents = !cursorOverInteractive
-        }
 
         if cursorOverInteractive, !wasCursorOverInteractive {
             handleDirectSignal(.mouseEntered)
@@ -414,14 +535,23 @@ final class PetOverlayController: NSObject {
 final class PetOverlayView: NSView {
     var windowDragHandler: ((NSPoint) -> Void)?
     var clickHandler: ((Int) -> Void)?
-    var dragStartedHandler: (() -> Void)?
+    var rightClickHandler: (() -> Void)?
+    var dragMovedHandler: ((NSPoint) -> Void)?
     var dragEndedHandler: (() -> Void)?
     var bubbleActionHandler: (() -> Void)?
+    var approvalDecisionHandler: ((String, String) -> Void)?
+    var updateButtonHandler: (() -> Void)?
 
     var scale: CGFloat = 1.0 {
         didSet { needsDisplay = true }
     }
     var bubbleText: String = "" {
+        didSet { needsDisplay = true }
+    }
+    var pendingApprovalID: String? {
+        didSet { needsDisplay = true }
+    }
+    var updateButtonText: String? {
         didSet { needsDisplay = true }
     }
 
@@ -432,6 +562,7 @@ final class PetOverlayView: NSView {
     private var frameTimer: Timer?
     private var phaseTimer: Timer?
     private var isDraggingPet = false
+    private var mouseDownStartedInBubble = false
 
     override var isFlipped: Bool { true }
 
@@ -449,8 +580,13 @@ final class PetOverlayView: NSView {
         )
     }
 
+    var petBodyHitRect: NSRect {
+        pet == nil ? .zero : bounds
+    }
+
     var bubbleRect: NSRect {
         guard !bubbleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .zero }
+        let hasApprovalActions = pendingApprovalID != nil
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.lineBreakMode = .byWordWrapping
@@ -459,23 +595,58 @@ final class PetOverlayView: NSView {
             .paragraphStyle: paragraph,
         ]
         let text = NSString(string: bubbleText)
-        let maxSize = NSSize(width: min(bounds.width - 28, 210), height: 80)
+        let maxWidth = min(bounds.width - 28, hasApprovalActions ? 170 : 210)
+        let maxSize = NSSize(width: maxWidth, height: hasApprovalActions ? 58 : 80)
         let textSize = text.boundingRect(
             with: maxSize,
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: attributes
         ).size
+        let minWidth = hasApprovalActions ? min(bounds.width - 18, 164) : 0
+        let width = min(bounds.width - 18, max(textSize.width + 22, minWidth))
         return NSRect(
-            x: (bounds.width - textSize.width - 22) / 2,
+            x: (bounds.width - width) / 2,
             y: 8,
-            width: textSize.width + 22,
-            height: textSize.height + 12
+            width: width,
+            height: textSize.height + 12 + (hasApprovalActions ? 34 : 0)
+        )
+    }
+
+    private var approvalButtonRects: (approve: NSRect, deny: NSRect)? {
+        guard pendingApprovalID != nil else { return nil }
+        let bubble = bubbleRect
+        guard !bubble.isEmpty else { return nil }
+        let gap: CGFloat = 8
+        let buttonHeight: CGFloat = 22
+        let innerWidth = max(0, bubble.width - 22)
+        let buttonWidth = max(48, (innerWidth - gap) / 2)
+        let y = bubble.maxY - buttonHeight - 6
+        let approve = NSRect(x: bubble.minX + 11, y: y, width: buttonWidth, height: buttonHeight)
+        let deny = NSRect(x: approve.maxX + gap, y: y, width: buttonWidth, height: buttonHeight)
+        return (approve, deny)
+    }
+
+    var updateButtonRect: NSRect {
+        guard let text = updateButtonText, !text.isEmpty else { return .zero }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        let width = max(textSize.width + 24, 90)
+        let height: CGFloat = 24
+        let sprite = spriteRect
+        // Place above the sprite (flipped coords: smaller y = higher on screen)
+        let y = sprite.isEmpty ? 8 : sprite.minY - height - 4
+        return NSRect(
+            x: (bounds.width - width) / 2,
+            y: max(2, y),
+            width: width,
+            height: height
         )
     }
 
     func containsInteractivePoint(_ point: NSPoint) -> Bool {
-        let paddedSprite = spriteRect.insetBy(dx: -6, dy: -6)
-        if !paddedSprite.isEmpty, paddedSprite.contains(point) {
+        if containsPetBodyPoint(point) {
             return true
         }
 
@@ -486,7 +657,27 @@ final class PetOverlayView: NSView {
             }
         }
 
+        let updateRect = updateButtonRect
+        if !updateRect.isEmpty, updateRect.contains(point) {
+            return true
+        }
+
         return false
+    }
+
+    func containsPetBodyPoint(_ point: NSPoint) -> Bool {
+        guard petBodyHitRect.contains(point) else { return false }
+        if bubbleActionHandler != nil {
+            let paddedBubble = bubbleRect.insetBy(dx: -6, dy: -6)
+            if !paddedBubble.isEmpty, paddedBubble.contains(point) {
+                return false
+            }
+        }
+        let updateRect = updateButtonRect
+        if !updateRect.isEmpty, updateRect.contains(point) {
+            return false
+        }
+        return true
     }
 
     func distanceFromSprite(to point: NSPoint) -> CGFloat {
@@ -539,14 +730,28 @@ final class PetOverlayView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.type == .rightMouseDown { return }
+        let point = convert(event.locationInWindow, from: nil)
         isDraggingPet = false
+        mouseDownStartedInBubble = !bubbleRect.isEmpty && bubbleRect.contains(point)
     }
 
     override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        defer {
+            mouseDownStartedInBubble = false
+        }
         if isDraggingPet {
             isDraggingPet = false
             dragEndedHandler?()
-        } else if bubbleActionHandler != nil, bubbleRect.contains(convert(event.locationInWindow, from: nil)) {
+        } else if let approvalDecision = approvalDecision(at: point) {
+            approvalDecisionHandler?(approvalDecision.approvalID, approvalDecision.decision)
+        } else if !updateButtonRect.isEmpty, updateButtonRect.contains(point) {
+            updateButtonHandler?()
+        } else if mouseDownStartedInBubble && !bubbleRect.contains(point) {
+            return
+        } else if pendingApprovalID != nil, bubbleRect.contains(point) {
+            return
+        } else if bubbleActionHandler != nil, bubbleRect.contains(point) {
             bubbleActionHandler?()
         } else {
             clickHandler?(max(1, event.clickCount))
@@ -554,15 +759,38 @@ final class PetOverlayView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if mouseDownStartedInBubble {
+            return
+        }
+        let delta = NSPoint(x: event.deltaX, y: event.deltaY)
         if !isDraggingPet {
             isDraggingPet = true
-            dragStartedHandler?()
         }
-        windowDragHandler?(NSPoint(x: event.deltaX, y: event.deltaY))
+        dragMovedHandler?(delta)
+        windowDragHandler?(delta)
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        NSApp.activate(ignoringOtherApps: true)
+        handleRightClick(at: convert(event.locationInWindow, from: nil))
+    }
+
+    func handleRightClick(at point: NSPoint, activateApp: Bool = true) {
+        guard containsPetBodyPoint(point) else { return }
+        if activateApp {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        rightClickHandler?()
+    }
+
+    func approvalDecision(at point: NSPoint) -> (approvalID: String, decision: String)? {
+        guard let approvalID = pendingApprovalID, let buttons = approvalButtonRects else { return nil }
+        if buttons.approve.contains(point) {
+            return (approvalID, "approved")
+        }
+        if buttons.deny.contains(point) {
+            return (approvalID, "denied")
+        }
+        return nil
     }
 
     private func startPlayback(_ mode: PetPlaybackMode) {
@@ -573,6 +801,8 @@ final class PetOverlayView: NSView {
             needsDisplay = true
         case .playOnce:
             playOnce()
+        case .loop:
+            startActiveLoop()
         case let .loopFor(duration):
             loopFor(duration)
         case let .loopWithPause(active, pause):
@@ -671,6 +901,10 @@ final class PetOverlayView: NSView {
         )
 
         image.draw(in: target, from: source, operation: .sourceOver, fraction: 1.0, respectFlipped: true, hints: nil)
+
+        if updateButtonText != nil {
+            drawUpdateButton()
+        }
     }
 
     private func drawBubble() {
@@ -694,10 +928,68 @@ final class PetOverlayView: NSView {
         path.lineWidth = 1
         path.stroke()
 
+        var textRect = bubbleRect.insetBy(dx: 11, dy: 6)
+        if approvalButtonRects != nil {
+            textRect.size.height = max(0, textRect.height - 30)
+        }
         text.draw(
-            with: bubbleRect.insetBy(dx: 11, dy: 6),
+            with: textRect,
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: attributes
+        )
+
+        if let buttons = approvalButtonRects {
+            drawApprovalButton(title: "Approve", rect: buttons.approve, fill: NSColor(calibratedRed: 0.08, green: 0.48, blue: 0.28, alpha: 1))
+            drawApprovalButton(title: "Deny", rect: buttons.deny, fill: NSColor(calibratedWhite: 0.18, alpha: 1))
+        }
+    }
+
+    private func drawApprovalButton(title: String, rect: NSRect, fill: NSColor) {
+        fill.setFill()
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        path.fill()
+        NSColor.black.withAlphaComponent(0.22).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor.white,
+        ]
+        let textSize = title.size(withAttributes: attributes)
+        title.draw(
+            at: NSPoint(
+                x: rect.midX - textSize.width / 2,
+                y: rect.midY - textSize.height / 2
+            ),
+            withAttributes: attributes
+        )
+    }
+
+    private func drawUpdateButton() {
+        let rect = updateButtonRect
+        guard !rect.isEmpty, let text = updateButtonText, !text.isEmpty else { return }
+
+        let fill = NSColor(calibratedRed: 0.18, green: 0.52, blue: 0.95, alpha: 0.92)
+        fill.setFill()
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        path.fill()
+
+        NSColor.white.withAlphaComponent(0.28).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor.white,
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        text.draw(
+            at: NSPoint(
+                x: rect.midX - textSize.width / 2,
+                y: rect.midY - textSize.height / 2
+            ),
+            withAttributes: attributes
         )
     }
 

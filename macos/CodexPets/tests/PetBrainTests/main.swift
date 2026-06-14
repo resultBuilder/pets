@@ -1,4 +1,5 @@
 import Cocoa
+import Darwin
 import Foundation
 
 private final class TestClock {
@@ -28,32 +29,11 @@ private func expectDecision(_ decision: PetDecision?, _ message: String) -> PetD
     return decision
 }
 
-private func murmurLine(
-    _ id: String,
-    trigger: PetMurmurEvent,
-    text: String,
-    group: String,
-    mood: PetMood = .happy,
-    rarity: DialogueRarity = .common,
-    minDaysBeforeRepeat: Int = 30,
-    cooldownMinutes: Int = 60,
-    tones: [String] = ["soft"],
-    requiresInteraction: Bool = false,
-    maxShowsTotal: Int? = nil
-) -> DialogueLine {
-    DialogueLine(
-        id: id,
-        text: text,
-        triggers: [trigger.rawValue],
-        moods: [mood.rawValue],
-        semanticGroup: group,
-        rarity: rarity,
-        minDaysBeforeRepeat: minDaysBeforeRepeat,
-        cooldownMinutes: cooldownMinutes,
-        tones: tones,
-        requiresInteraction: requiresInteraction,
-        maxShowsTotal: maxShowsTotal
-    )
+private func runMainLoop(for seconds: TimeInterval) {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        RunLoop.current.run(mode: .default, before: min(Date().addingTimeInterval(0.02), deadline))
+    }
 }
 
 private func testMouseProximityRequiresDwellAndCooldown() {
@@ -65,7 +45,6 @@ private func testMouseProximityRequiresDwellAndCooldown() {
     let curious = expectDecision(brain.handle(.mouseNear(distance: 100)), "near cursor after dwell")
     expect(curious.mood == .curious, "near cursor after dwell should be curious")
     expect(curious.stateID == "waiting", "curious should use waiting pose")
-    expect(curious.bubble != nil, "curious proximity can show a short murmur in default mode")
 
     clock.advance(1)
     expect(brain.handle(.mouseNear(distance: 90)) == nil, "curious should respect cooldown")
@@ -85,42 +64,6 @@ private func testFocusModeAndReduceMotionStayQuiet() {
     expect(running.playback == .staticFrame(0), "reduce motion should force static playback")
 }
 
-private func testCodexEventsMapToEmotionsAndBubbles() {
-    let clock = TestClock(1_700_000_000)
-    let brain = PetBrain(
-        mode: .default,
-        bubbleMode: .all,
-        now: { clock.now },
-        dialogueNow: { clock.now },
-        dialogueEngine: DialogueEngine(
-            lines: [
-                murmurLine("success", trigger: .codexSuccess, text: "оно зелёное. я довольна.", group: "success_green", mood: .happy, tones: ["coding"]),
-                murmurLine("waiting", trigger: .codexWaiting, text: "кажется, теперь твой ход.", group: "waiting_user_turn", mood: .waiting),
-            ],
-            now: { clock.now },
-            random: { 0 }
-        )
-    )
-
-    let success = expectDecision(
-        brain.handle(.codexEvent(type: "task.succeeded", label: "Tests passed", importance: .low)),
-        "task success"
-    )
-    expect(success.mood == .happy, "task.succeeded should be happy")
-    expect(success.stateID == "waving", "task.succeeded should wave")
-    expect(success.bubble == "оно зелёное. я довольна.", "success should use a curated murmur")
-    expect(success.duration == 1.6, "success should be short")
-
-    clock.advance(4 * 60)
-    let needsUser = expectDecision(
-        brain.handle(.codexEvent(type: "task.needs_user", label: "Review changes?", importance: .medium)),
-        "needs user"
-    )
-    expect(needsUser.mood == .waiting, "task.needs_user should be waiting")
-    expect(needsUser.stateID == "waiting", "task.needs_user should use waiting pose")
-    expect(needsUser.bubble == "кажется, теперь твой ход.", "needs-user event should use a curated murmur")
-}
-
 private func testClickSpamBecomesAnnoyed() {
     let clock = TestClock()
     let brain = PetBrain(mode: .default, now: { clock.now })
@@ -132,7 +75,7 @@ private func testClickSpamBecomesAnnoyed() {
     let annoyed = expectDecision(brain.handle(.clicked(count: 1)), "spam click threshold")
     expect(annoyed.mood == .annoyed, "5 clicks in 10s should become annoyed")
     expect(annoyed.stateID == "failed", "annoyed should use failed/startled pose")
-    expect(annoyed.bubble != nil, "spam click should get one short anti-spam murmur")
+    expect(annoyed.bubble == nil, "murmur text lives in the daemon; local decisions stay silent")
 }
 
 private func testIdleAttentionBudgetCapsMicroIdle() {
@@ -185,6 +128,20 @@ private func testDoubleClickOverridesSingleClickCooldown() {
     expect(doubleClick.stateID == "jumping", "double-click should use petting/jumping pose")
 }
 
+private func testDragUsesDirectionalRunningLoop() {
+    let brain = PetBrain(mode: .default)
+
+    let right = expectDecision(brain.handle(.dragged(direction: .right)), "dragging right")
+    expect(right.mood == .happy, "dragging should stay an interaction")
+    expect(right.stateID == "running-right", "dragging right should use right run animation")
+    expect(right.playback == .loop, "dragging should actively loop until mouse-up")
+    expect(right.duration == nil, "dragging should be ended by mouse-up instead of a fixed duration")
+
+    let left = expectDecision(brain.handle(.dragged(direction: .left)), "dragging left")
+    expect(left.stateID == "running-left", "dragging left should use left run animation")
+    expect(left.playback == .loop, "dragging left should actively loop until mouse-up")
+}
+
 private func testSuccessEventStillAppliesDuringHappyCooldown() {
     let clock = TestClock()
     let brain = PetBrain(mode: .default, now: { clock.now })
@@ -229,174 +186,8 @@ private func testMouseLeavingRadiusResetsDwell() {
     expect(brain.handle(.mouseNear(distance: 100)) == nil, "re-enter should require a fresh dwell")
 }
 
-private func testDialogueEngineAvoidsExactAndSemanticRepeats() {
-    let clock = TestClock(1_700_000_000)
-    var history = DialogueHistory()
-    let settings = DialogueSettings(
-        mode: .all,
-        dailyLimit: 10,
-        globalCooldownSeconds: 0,
-        groupCooldownSeconds: 60 * 60
-    )
-    let engine = DialogueEngine(
-        lines: [
-            murmurLine("success_a", trigger: .codexSuccess, text: "получилось.", group: "success_small_victory"),
-            murmurLine("success_b", trigger: .codexSuccess, text: "ура.", group: "success_small_victory"),
-            murmurLine("success_c", trigger: .codexSuccess, text: "зелёный день.", group: "success_green_day"),
-        ],
-        now: { clock.now },
-        random: { 0 }
-    )
-
-    let first = engine.maybeSpeak(event: .codexSuccess, mood: .happy, settings: settings, history: &history)
-    expect(first?.id == "success_a", "first unseen line should be selected")
-
-    let second = engine.maybeSpeak(event: .codexSuccess, mood: .happy, settings: settings, history: &history)
-    expect(second?.id == "success_c", "semantic group cooldown should skip similar success lines")
-
-    clock.advance(2 * 60 * 60)
-    let third = engine.maybeSpeak(event: .codexSuccess, mood: .happy, settings: settings, history: &history)
-    expect(third?.id == "success_b", "exact repeat should be blocked while sibling group line can return later")
-}
-
-private func testDialogueModesAndDailyBudget() {
-    let clock = TestClock(1_700_000_000)
-    let lines = [
-        murmurLine("click", trigger: .interactionClick, text: "+1 к уюту.", group: "interaction_petted", mood: .happy, requiresInteraction: true),
-        murmurLine("near", trigger: .mouseNear, text: "я вижу курсор.", group: "cursor_watch", mood: .curious),
-        murmurLine("review", trigger: .codexReview, text: "пора посмотреть.", group: "review_ready", mood: .waiting, tones: ["coding"]),
-    ]
-    let engine = DialogueEngine(lines: lines, now: { clock.now }, random: { 0 })
-
-    var silentHistory = DialogueHistory()
-    let silent = engine.maybeSpeak(
-        event: .codexReview,
-        mood: .waiting,
-        settings: DialogueSettings(mode: .off, dailyLimit: 10, globalCooldownSeconds: 0),
-        history: &silentHistory
-    )
-    expect(silent == nil, "silent mode should block all murmurs")
-
-    var quietHistory = DialogueHistory()
-    let quietClick = engine.maybeSpeak(
-        event: .interactionClick,
-        mood: .happy,
-        settings: DialogueSettings(mode: .importantOnly, dailyLimit: 10, globalCooldownSeconds: 0),
-        history: &quietHistory
-    )
-    expect(quietClick == nil, "quiet mode should skip interaction jokes")
-    let quietReview = engine.maybeSpeak(
-        event: .codexReview,
-        mood: .waiting,
-        settings: DialogueSettings(mode: .importantOnly, dailyLimit: 10, globalCooldownSeconds: 0),
-        history: &quietHistory
-    )
-    expect(quietReview?.id == "review", "quiet mode should allow important workflow status")
-
-    var cappedHistory = DialogueHistory()
-    let cappedSettings = DialogueSettings(mode: .all, dailyLimit: 1, globalCooldownSeconds: 0)
-    let first = engine.maybeSpeak(event: .interactionClick, mood: .happy, settings: cappedSettings, history: &cappedHistory)
-    expect(first?.id == "click", "first murmur should fit under daily cap")
-    clock.advance(10 * 60)
-    let second = engine.maybeSpeak(event: .mouseNear, mood: .curious, settings: cappedSettings, history: &cappedHistory)
-    expect(second == nil, "daily cap should stop more low-priority bubbles after budget is used")
-}
-
-private func testDialogueImportantWorkflowBypassesLowPriorityDailyCap() {
-    let clock = TestClock(1_700_000_000)
-    var history = DialogueHistory()
-    let settings = DialogueSettings(mode: .all, dailyLimit: 1, globalCooldownSeconds: 0, groupCooldownSeconds: 0)
-    let engine = DialogueEngine(
-        lines: [
-            murmurLine("click", trigger: .interactionClick, text: "+1 к уюту.", group: "interaction_petted", mood: .happy, requiresInteraction: true),
-            murmurLine("failed", trigger: .codexFailed, text: "что-то хрустнуло. но не мы.", group: "failed_soft", mood: .sad),
-        ],
-        now: { clock.now },
-        random: { 0 }
-    )
-
-    let click = engine.maybeSpeak(event: .interactionClick, mood: .happy, settings: settings, history: &history)
-    expect(click?.id == "click", "low-priority interaction should consume the normal daily cap")
-
-    let failed = engine.maybeSpeak(event: .codexFailed, mood: .sad, settings: settings, history: &history)
-    expect(failed?.id == "failed", "important workflow events should still speak after ambient budget is used")
-}
-
-private func testMuteForTodayUsesLocalCalendarBoundary() {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(secondsFromGMT: 5 * 60 * 60 + 30 * 60)!
-    let nowDate = calendar.date(from: DateComponents(year: 2026, month: 6, day: 9, hour: 22, minute: 15))!
-    let expectedEnd = calendar.dateInterval(of: .day, for: nowDate)!.end.timeIntervalSince1970
-
-    var history = DialogueHistory()
-    history.muteForToday(now: nowDate.timeIntervalSince1970, calendar: calendar)
-
-    expect(abs((history.mutedUntil ?? 0) - expectedEnd) < 0.01, "mute for today should end at local midnight")
-}
-
-private func testPetBrainUsesCuratedMurmursForWorkflowStatus() {
-    let clock = TestClock(1_700_000_000)
-    let brain = PetBrain(
-        mode: .default,
-        bubbleMode: .all,
-        now: { clock.now },
-        dialogueNow: { clock.now },
-        dialogueEngine: DialogueEngine(
-            lines: [
-                murmurLine("success", trigger: .codexSuccess, text: "получилось.", group: "success_small_victory", mood: .happy),
-                murmurLine("review", trigger: .codexReview, text: "готово к человеческому взгляду.", group: "review_ready", mood: .waiting, tones: ["coding"]),
-            ],
-            now: { clock.now },
-            random: { 0 }
-        )
-    )
-
-    let success = expectDecision(
-        brain.handle(.codexEvent(type: "task.succeeded", label: "Tests passed", importance: .low)),
-        "success should produce a decision"
-    )
-    expect(success.bubble == "получилось.", "success should use curated murmur instead of raw event label")
-
-    let repeated = expectDecision(
-        brain.handle(.codexEvent(type: "task.succeeded", label: "Tests passed", importance: .low)),
-        "repeated success still animates"
-    )
-    expect(repeated.bubble == nil, "same workflow event should not repeat a murmur immediately")
-
-    clock.advance(5 * 60)
-    let review = expectDecision(brain.handle(.codexState("review")), "review transition")
-    expect(review.bubble == "готово к человеческому взгляду.", "review state should use a curated coding murmur")
-}
-
-private func testPetBrainDismissedBubbleMutesMurmursForHours() {
-    let clock = TestClock(1_700_000_000)
-    let brain = PetBrain(
-        mode: .default,
-        bubbleMode: .all,
-        now: { clock.now },
-        dialogueNow: { clock.now },
-        dialogueEngine: DialogueEngine(
-            lines: [
-                murmurLine("review", trigger: .codexReview, text: "пора посмотреть.", group: "review_ready", mood: .waiting, tones: ["coding"]),
-                murmurLine("failed", trigger: .codexFailed, text: "что-то хрустнуло. но не мы.", group: "failed_soft", mood: .sad, tones: ["soft"]),
-            ],
-            now: { clock.now },
-            random: { 0 }
-        )
-    )
-
-    brain.muteMurmurs(for: 3 * 60 * 60)
-    let muted = expectDecision(brain.handle(.codexState("review")), "review still changes animation while muted")
-    expect(muted.bubble == nil, "manual dismissal should silence murmurs")
-
-    clock.advance(4 * 60 * 60)
-    let unmuted = expectDecision(brain.handle(.codexState("failed")), "failed after mute expires")
-    expect(unmuted.bubble == "что-то хрустнуло. но не мы.", "murmurs should resume after mute expires")
-}
-
-private func testBubbleHitTestingDoesNotCaptureTransparentGap() {
-    let view = PetOverlayView(frame: NSRect(x: 0, y: 0, width: 190, height: 235))
-    let pet = PetPackage(
+private func makeTestPetPackage() -> PetPackage {
+    PetPackage(
         slug: "test",
         displayName: "Test Pet",
         detail: "Test",
@@ -408,6 +199,27 @@ private func testBubbleHitTestingDoesNotCaptureTransparentGap() {
         frameHeight: 208,
         states: PetAnimationState.defaults
     )
+}
+
+private func testUpdateStatusMapsWireStates() {
+    func state(available: Bool? = nil, behind: Int? = nil, stage: String? = nil, message: String? = nil) -> DaemonUpdateState {
+        DaemonUpdateState(available: available, commitsBehind: behind, stage: stage, message: message)
+    }
+
+    expect(UpdateStatus.fromDaemon(nil) == .idle, "missing update state should map to idle")
+    expect(UpdateStatus.fromDaemon(state()) == .idle, "empty update state should map to idle")
+    expect(UpdateStatus.fromDaemon(state(stage: "checking")) == .checking, "checking stage should map to checking")
+    expect(UpdateStatus.fromDaemon(state(available: true, behind: 3)) == .available(commitsBehind: 3), "available state should keep commit count")
+    expect(UpdateStatus.fromDaemon(state(available: true)) == .available(commitsBehind: 0), "available without count should map to rebuild")
+    expect(UpdateStatus.fromDaemon(state(stage: "pulling")) == .updating(stage: "Pulling…"), "pulling stage should map to updating")
+    expect(UpdateStatus.fromDaemon(state(stage: "building")) == .updating(stage: "Building…"), "building stage should map to updating")
+    expect(UpdateStatus.fromDaemon(state(stage: "failed", message: "git pull failed")) == .failed(message: "git pull failed"), "failed stage should carry its message")
+    expect(UpdateStatus.fromDaemon(state(stage: "restartPending")) == .restarting, "restartPending should map to restarting")
+}
+
+private func testOverlayHitTestingMakesWholePetBodyDraggable() {
+    let view = PetOverlayView(frame: NSRect(x: 0, y: 0, width: 190, height: 235))
+    let pet = makeTestPetPackage()
     view.setPet(pet, state: PetAnimationState.defaults[0], scale: 0.76, playback: .staticFrame(0))
     view.bubbleText = "пора посмотреть."
     view.bubbleActionHandler = {}
@@ -416,29 +228,489 @@ private func testBubbleHitTestingDoesNotCaptureTransparentGap() {
     let sprite = view.spriteRect
     let bubblePoint = NSPoint(x: bubble.midX, y: bubble.midY)
     let spritePoint = NSPoint(x: sprite.midX, y: sprite.midY)
+    let spriteCornerPoint = NSPoint(x: sprite.minX + 1, y: sprite.minY + 1)
+    let bodyEdgePoint = NSPoint(x: view.petBodyHitRect.minX + 1, y: sprite.midY)
     let gapPoint = NSPoint(x: sprite.midX, y: (bubble.maxY + sprite.minY) / 2)
+    let lowerBodyPoint = NSPoint(x: view.bounds.midX, y: view.bounds.maxY - 2)
 
     expect(view.containsInteractivePoint(bubblePoint), "bubble should be clickable")
     expect(view.containsInteractivePoint(spritePoint), "sprite should stay clickable")
-    expect(!view.containsInteractivePoint(gapPoint), "transparent gap between bubble and sprite should remain click-through")
+    expect(view.containsInteractivePoint(spriteCornerPoint), "whole sprite body should be draggable")
+    expect(view.containsInteractivePoint(bodyEdgePoint), "pet body hitbox should be draggable")
+    expect(view.containsInteractivePoint(gapPoint), "space around the pet should drag with the body")
+    expect(view.containsInteractivePoint(lowerBodyPoint), "lower pet overlay should be draggable")
+
+    view.pendingApprovalID = "approval-1"
+    let approvalBubble = view.bubbleRect
+    let approvePoint = NSPoint(x: approvalBubble.minX + 35, y: approvalBubble.maxY - 17)
+    let denyPoint = NSPoint(x: approvalBubble.maxX - 35, y: approvalBubble.maxY - 17)
+    expect(view.approvalDecision(at: approvePoint)?.decision == "approved", "approval bubble approve button should be hit-testable")
+    expect(view.approvalDecision(at: denyPoint)?.decision == "denied", "approval bubble deny button should be hit-testable")
+}
+
+private func testOverlayRightClickRequestsPetBrowser() {
+    let view = PetOverlayView(frame: NSRect(x: 0, y: 0, width: 190, height: 235))
+    let pet = makeTestPetPackage()
+    view.setPet(pet, state: PetAnimationState.defaults[0], scale: 0.76, playback: .staticFrame(0))
+
+    var rightClicks = 0
+    view.rightClickHandler = {
+        rightClicks += 1
+    }
+    view.handleRightClick(at: NSPoint(x: view.petBodyHitRect.midX, y: view.petBodyHitRect.midY), activateApp: false)
+    expect(rightClicks == 1, "right-clicking the pet body should request the pet browser")
+
+    view.bubbleText = "hello"
+    view.bubbleActionHandler = {}
+    view.handleRightClick(at: NSPoint(x: view.bubbleRect.midX, y: view.bubbleRect.midY), activateApp: false)
+    expect(rightClicks == 1, "right-clicking a murmur bubble should not open the pet browser")
+}
+
+private func testOverlayKeepsBubbleThroughAutoIdleReset() {
+    let overlay = PetOverlayController()
+    overlay.setPet(makeTestPetPackage())
+    overlay.hide()
+
+    overlay.setState("waving", duration: 0.08)
+    overlay.setBubble("agent done", autoClearAfter: 0.3)
+
+    runMainLoop(for: 0.14)
+    expect(overlay.currentStateID == "idle", "short completion pose should auto-reset to idle")
+    expect(overlay.currentBubbleText == "agent done", "auto idle reset should not clear the active bubble")
+
+    runMainLoop(for: 0.25)
+    expect(overlay.currentBubbleText.isEmpty, "bubble should still clear on its own timer")
+    overlay.hide()
+}
+
+private func testPetPackageMapsDaemonRefWithoutManifestParsing() {
+    let ref = DaemonPetRef(
+        id: "app:boba:/pets/boba",
+        slug: "boba",
+        displayName: "Boba",
+        description: "A bundled pet.",
+        kind: "creature",
+        source: "app",
+        path: "/pets/boba",
+        spritesheetPath: "spritesheet.webp",
+        frameWidth: 96,
+        frameHeight: 104,
+        license: "MIT",
+        attribution: "tests"
+    )
+
+    let pet = petPackage(from: ref)
+    expect(pet != nil, "enriched daemon ref should map to a render package")
+    expect(pet?.id == ref.id, "mapped package id must round-trip the daemon pet id")
+    expect(pet?.displayName == "Boba", "mapped package should carry display name")
+    expect(pet?.detail == "A bundled pet.", "mapped package should carry description")
+    expect(pet?.kind == "creature", "mapped package should carry kind")
+    expect(pet?.frameWidth == 96 && pet?.frameHeight == 104, "mapped package should carry frame size")
+    expect(pet?.spritesheet.path == "/pets/boba/spritesheet.webp", "mapped package should resolve the spritesheet inside the package directory")
+
+    let incomplete = DaemonPetRef(
+        id: "app:x:/pets/x", slug: nil, displayName: "X", description: nil, kind: nil,
+        source: "app", path: "/pets/x", spritesheetPath: nil, frameWidth: nil, frameHeight: nil,
+        license: nil, attribution: nil
+    )
+    expect(petPackage(from: incomplete) == nil, "refs without slug or spritesheet cannot render and are skipped")
+}
+
+private func testDaemonSnapshotDecodesWirePresentation() {
+    let wire = """
+    {
+      "attention": "failed",
+      "sessions": [{"id": "s1", "status": "failed", "safeSummary": "provider HTTP 500", "startedAt": "2026-06-12T10:00:00Z", "updatedAt": "2026-06-12T10:00:01Z"}],
+      "pendingApprovals": [],
+      "installedPets": [],
+      "catalogs": {},
+      "presentation": {"stateId": "failed", "bubble": "Pi failed: provider HTTP 500", "autoClearSeconds": 8, "activeSessionIds": []},
+      "updatedAt": "2026-06-12T10:00:01Z"
+    }
+    """
+    let snapshot = try? JSONDecoder().decode(DaemonSnapshot.self, from: Data(wire.utf8))
+    expect(snapshot != nil, "snapshot with wire presentation should decode")
+    expect(snapshot?.presentationOrIdle.stateId == "failed", "wire presentation state should decode")
+    expect(snapshot?.presentationOrIdle.bubble == "Pi failed: provider HTTP 500", "wire presentation bubble should decode")
+    expect(snapshot?.presentationOrIdle.autoClearAfter == 8, "wire presentation auto-clear should decode")
+
+    let withoutPresentation = """
+    {"attention": "idle", "sessions": [], "pendingApprovals": [], "installedPets": []}
+    """
+    let fallback = try? JSONDecoder().decode(DaemonSnapshot.self, from: Data(withoutPresentation.utf8))
+    expect(fallback?.presentationOrIdle.stateId == "idle", "snapshot without presentation should fall back to idle")
+    expect(fallback?.presentationOrIdle.autoClearAfter == nil, "fallback presentation should not auto-clear")
+}
+
+private func testOverlayKeepsDaemonDoneBubbleAcrossIdleSnapshot() {
+    let overlay = PetOverlayController()
+    overlay.setPet(makeTestPetPackage())
+    overlay.hide()
+
+    let done = DaemonSnapshot(
+        attention: "done",
+        sessions: [
+            DaemonSession(
+                id: "s1",
+                cwd: nil,
+                title: nil,
+                status: "done",
+                safeSummary: "agent done",
+                tools: nil
+            ),
+        ],
+        pendingApprovals: [],
+        selectedPetId: nil,
+        installedPets: [],
+        presentation: DaemonPresentation(
+            stateId: "waving",
+            bubble: "Pi done: agent done",
+            autoClearSeconds: 6,
+            activeSessionIds: []
+        ),
+        update: nil
+    )
+    let idle = DaemonSnapshot(
+        attention: "idle",
+        sessions: [],
+        pendingApprovals: [],
+        selectedPetId: nil,
+        installedPets: [],
+        presentation: DaemonPresentation(
+            stateId: "idle",
+            bubble: nil,
+            autoClearSeconds: nil,
+            activeSessionIds: []
+        ),
+        update: nil
+    )
+
+    overlay.applyDaemonSnapshot(done)
+    expect(overlay.currentBubbleText == "Pi done: agent done", "done snapshot should show the completion bubble")
+
+    overlay.applyDaemonSnapshot(idle)
+    expect(overlay.currentStateID == "idle", "idle snapshot should still move the pet to idle")
+    expect(overlay.currentBubbleText == "Pi done: agent done", "idle snapshot should not immediately clear an auto-clearing done bubble")
+
+    overlay.setBubble("stale running", autoClearAfter: nil)
+    overlay.applyDaemonSnapshot(idle)
+    expect(overlay.currentBubbleText.isEmpty, "idle snapshot should clear non-auto-clearing daemon bubbles")
+    overlay.hide()
+}
+
+private func testStateServerRequiresExplicitDebugFlag() {
+    unsetenv("CODEX_PETS_ENABLE_HTTP_STATE_API")
+    expect(!StateServer.isDebugEnabled, "legacy HTTP state API should be disabled by default")
+
+    setenv("CODEX_PETS_ENABLE_HTTP_STATE_API", "1", 1)
+    expect(StateServer.isDebugEnabled, "legacy HTTP state API should accept explicit debug flag")
+
+    setenv("CODEX_PETS_ENABLE_HTTP_STATE_API", "false", 1)
+    expect(!StateServer.isDebugEnabled, "legacy HTTP state API should reject false-like flag")
+    unsetenv("CODEX_PETS_ENABLE_HTTP_STATE_API")
+}
+
+private func testPetdexBrowserBridgeActionAllowlist() {
+    let allowed = Set(PetdexBrowserBridgeAction.allCases.map(\.rawValue))
+    expect(
+        allowed == Set([
+            "importPet",
+            "listBrowserPets",
+            "listInstalledPets",
+            "selectInstalledPet",
+            "installPiExtension",
+            "uninstallPiExtension",
+            "getPiExtensionStatus",
+        ]),
+        "native bridge should expose only the expected allowlisted actions"
+    )
+    expect(PetdexBrowserBridgeAction(rawValue: "openShell") == nil, "native bridge should reject unknown actions")
+    expect(PetdexBrowserBridgeAction(rawValue: "eval") == nil, "native bridge should reject privileged-looking actions")
+}
+
+private func testInstalledPetPayloadIsDataOnly() {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-pets-payload-\(UUID().uuidString)", isDirectory: true)
+    let spriteURL = root.appendingPathComponent("spritesheet.png")
+    try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try! Data([0x89, 0x50, 0x4e, 0x47]).write(to: spriteURL)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let pet = PetPackage(
+        slug: "miso",
+        displayName: "Miso",
+        detail: "Imported pet",
+        kind: "fox",
+        source: .app,
+        directory: root,
+        spritesheet: spriteURL,
+        frameWidth: 96,
+        frameHeight: 104,
+        states: PetAnimationState.defaults
+    )
+
+    let payload = PetdexBrowserWindowController.installedPetPayload(pet)
+    expect(payload["source"] as? String == "installed", "installed pet payload should be marked as installed source")
+    expect(payload["nativePetId"] as? String == pet.id, "installed pet payload should include opaque native pet id")
+    let spritesheetUrl = payload["spritesheetUrl"] as? String ?? ""
+    expect(spritesheetUrl.hasPrefix("codexpets-asset:///pet/"), "installed pet payload should reference the asset scheme instead of inlining bytes")
+    expect(spritesheetUrl.hasSuffix("/spritesheet.png"), "asset URL should keep the spritesheet extension for MIME detection")
+    expect(!spritesheetUrl.contains(root.path), "asset URL should not leak the raw filesystem path")
+    let assetURL = URL(string: spritesheetUrl)
+    expect(assetURL.flatMap(PetAssetSchemeHandler.petID(fromAssetURL:)) == pet.id, "asset URL should round-trip back to the pet id")
+    expect(payload["canUninstall"] as? Bool == true, "app-imported installed pet should be uninstallable")
+    expect(payload["frameWidth"] as? Int == 96, "installed pet payload should preserve frame width")
+    expect(payload["frameHeight"] as? Int == 104, "installed pet payload should preserve frame height")
+
+    let external = PetPackage(
+        slug: "codex",
+        displayName: "Codex Pet",
+        detail: "Shared pet",
+        kind: "pet",
+        source: .codex,
+        directory: URL(fileURLWithPath: "/Users/me/.codex/pets/codex"),
+        spritesheet: URL(fileURLWithPath: "/Users/me/.codex/pets/codex/spritesheet.png"),
+        frameWidth: 192,
+        frameHeight: 208,
+        states: PetAnimationState.defaults
+    )
+    let externalPayload = PetdexBrowserWindowController.installedPetPayload(external)
+    expect(externalPayload["canUninstall"] as? Bool == false, "shared .codex installed pet should not be uninstallable from app storage")
+}
+
+private func testBundledGoDaemonServesPiProtocolOverUnixSocket() {
+    guard
+        let daemonBinaryPath = ProcessInfo.processInfo.environment["CODEX_PETS_TEST_DAEMON_BIN"],
+        !daemonBinaryPath.isEmpty
+    else {
+        expect(false, "CODEX_PETS_TEST_DAEMON_BIN should point at a built pi-pet-daemon binary")
+        return
+    }
+    let directory = URL(fileURLWithPath: "/tmp", isDirectory: true)
+        .appendingPathComponent("codex-pets-go-daemon-\(UUID().uuidString)", isDirectory: true)
+    let socketPath = directory.appendingPathComponent("pi-pet.sock").path
+    let controller = DaemonProcessController(
+        binaryURL: URL(fileURLWithPath: daemonBinaryPath),
+        socketPath: socketPath,
+        stateFileURL: directory.appendingPathComponent("daemon-state.json")
+    )
+    controller.start()
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    // The test runner has no main run loop, so wait for the socket directly
+    // instead of relying on the controller's main-queue onReady callback.
+    var socketReady = false
+    let readyDeadline = Date().addingTimeInterval(10)
+    while Date() < readyDeadline {
+        if FileManager.default.fileExists(atPath: socketPath) {
+            socketReady = true
+            break
+        }
+        usleep(50_000)
+    }
+    expect(socketReady, "bundled Go daemon should create its Unix socket")
+
+    let running = daemonRequest(
+        socketPath: socketPath,
+        method: "session.upsert",
+        payload: [
+            "sessionId": "swift-test",
+            "cwd": "/tmp",
+            "title": "Swift Test",
+            "status": "running",
+            "safeSummary": "agent running",
+        ]
+    )
+    let runningPayload = running["payload"] as? [String: Any]
+    expect(runningPayload?["attention"] as? String == "running", "daemon should derive running attention")
+    expect((runningPayload?["sessions"] as? [[String: Any]])?.count == 1, "daemon should return sessions as an array")
+    expect((runningPayload?["pendingApprovals"] as? [[String: Any]])?.isEmpty == true, "daemon should return approvals as an array")
+
+    let toolUpdate = daemonRequest(
+        socketPath: socketPath,
+        method: "tool.update",
+        payload: [
+            "sessionId": "swift-test",
+            "toolCallId": "tool-1",
+            "toolName": "bash",
+            "safeSummary": "bash running",
+        ]
+    )
+    let toolPayload = toolUpdate["payload"] as? [String: Any]
+    let sessions = toolPayload?["sessions"] as? [[String: Any]]
+    let tools = sessions?.first?["tools"] as? [[String: Any]]
+    expect(tools?.first?["state"] as? String == "running", "daemon should track tool update state")
+    expect(tools?.first?["safeSummary"] as? String == "bash running", "daemon should track safe tool summaries")
+
+    let removed = daemonRequest(
+        socketPath: socketPath,
+        method: "session.remove",
+        payload: ["sessionId": "swift-test"]
+    )
+    let removedPayload = removed["payload"] as? [String: Any]
+    expect(removedPayload?["attention"] as? String == "idle", "daemon should return to idle when a session is removed")
+    expect((removedPayload?["sessions"] as? [[String: Any]])?.isEmpty == true, "daemon should remove terminated sessions")
+
+    let lateTool = daemonRequest(
+        socketPath: socketPath,
+        method: "tool.start",
+        payload: [
+            "sessionId": "swift-test",
+            "toolCallId": "late-tool",
+            "toolName": "bash",
+        ]
+    )
+    let lateToolPayload = lateTool["payload"] as? [String: Any]
+    expect((lateToolPayload?["sessions"] as? [[String: Any]])?.isEmpty == true, "late tool events should not recreate removed sessions")
+
+    _ = daemonRequest(
+        socketPath: socketPath,
+        method: "session.upsert",
+        payload: [
+            "sessionId": "approval-test",
+            "status": "running",
+        ]
+    )
+    final class ApprovalResultBox {
+        var payload: [String: Any]?
+    }
+    let approvalResult = ApprovalResultBox()
+    let approvalFinished = DispatchSemaphore(value: 0)
+    DispatchQueue.global(qos: .utility).async {
+        let response = daemonRequest(
+            socketPath: socketPath,
+            method: "approval.request",
+            payload: [
+                "approvalId": "approval-1",
+                "sessionId": "approval-test",
+                "toolName": "bash",
+                "timeoutMillis": 5000,
+            ]
+        )
+        approvalResult.payload = response["payload"] as? [String: Any]
+        approvalFinished.signal()
+    }
+
+    var sawPendingApproval = false
+    for _ in 0..<50 {
+        let snapshotResponse = daemonRequest(socketPath: socketPath, method: "snapshot.get", payload: [:])
+        let snapshotPayload = snapshotResponse["payload"] as? [String: Any]
+        if (snapshotPayload?["pendingApprovals"] as? [[String: Any]])?.count == 1 {
+            sawPendingApproval = true
+            break
+        }
+        usleep(20_000)
+    }
+    expect(sawPendingApproval, "daemon should expose pending approval before session removal")
+
+    let removedWithApproval = daemonRequest(
+        socketPath: socketPath,
+        method: "session.remove",
+        payload: ["sessionId": "approval-test"]
+    )
+    let removedWithApprovalPayload = removedWithApproval["payload"] as? [String: Any]
+    expect(removedWithApprovalPayload?["attention"] as? String == "idle", "session removal should clear approval attention")
+    expect((removedWithApprovalPayload?["pendingApprovals"] as? [[String: Any]])?.isEmpty == true, "session removal should clear pending approvals")
+    expect(approvalFinished.wait(timeout: .now() + .seconds(2)) == .success, "session removal should unblock pending approval requests")
+    expect(approvalResult.payload?["decision"] as? String == "expired", "session removal should expire pending approval requests")
+    expect(approvalResult.payload?["reason"] as? String == "session terminated", "session removal approval reason should explain termination")
+
+    controller.stop()
+    expect(!FileManager.default.fileExists(atPath: socketPath), "stopping the daemon should shut it down and remove its socket")
+}
+
+private func daemonRequest(socketPath: String, method: String, payload: [String: Any]) -> [String: Any] {
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    expect(fd >= 0, "test socket should open")
+    defer { Darwin.close(fd) }
+
+    var timeout = timeval(tv_sec: 2, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    expect(connectUnixForTest(fd, path: socketPath), "test socket should connect to daemon")
+
+    let message: [String: Any] = [
+        "version": 1,
+        "kind": "request",
+        "id": "test-\(method)",
+        "method": method,
+        "payload": payload,
+    ]
+    guard JSONSerialization.isValidJSONObject(message),
+          var data = try? JSONSerialization.data(withJSONObject: message, options: [])
+    else {
+        expect(false, "test daemon request should encode")
+        return [:]
+    }
+    data.append(0x0a)
+    let sent = data.withUnsafeBytes { rawBuffer in
+        Darwin.write(fd, rawBuffer.baseAddress, data.count)
+    }
+    expect(sent == data.count, "test daemon request should write")
+
+    var response = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while response.firstIndex(of: 0x0a) == nil {
+        let count = buffer.withUnsafeMutableBytes { rawBuffer in
+            Darwin.read(fd, rawBuffer.baseAddress, rawBuffer.count)
+        }
+        expect(count > 0, "test daemon response should read")
+        response.append(contentsOf: buffer.prefix(count))
+    }
+    let line = Data(response[..<(response.firstIndex(of: 0x0a) ?? response.endIndex)])
+    guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+        expect(false, "test daemon response should decode")
+        return [:]
+    }
+    expect(object["error"] == nil, "test daemon response should not be an error: \(object)")
+    return object
+}
+
+private func connectUnixForTest(_ fd: Int32, path: String) -> Bool {
+    var address = sockaddr_un()
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    address.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array(path.utf8CString)
+    let maxPathLength = MemoryLayout.size(ofValue: address.sun_path)
+    guard bytes.count <= maxPathLength else { return false }
+    withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: maxPathLength) { destination in
+            for index in 0..<maxPathLength {
+                destination[index] = 0
+            }
+            for index in 0..<bytes.count {
+                destination[index] = bytes[index]
+            }
+        }
+    }
+    return withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+            Darwin.connect(fd, socketAddress, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
+        }
+    }
 }
 
 let tests: [(String, () -> Void)] = [
-    ("dialogue avoids repeats", testDialogueEngineAvoidsExactAndSemanticRepeats),
-    ("dialogue modes and daily budget", testDialogueModesAndDailyBudget),
-    ("important workflow bypasses low-priority daily cap", testDialogueImportantWorkflowBypassesLowPriorityDailyCap),
-    ("mute for today uses local calendar", testMuteForTodayUsesLocalCalendarBoundary),
-    ("pet brain curated workflow murmurs", testPetBrainUsesCuratedMurmursForWorkflowStatus),
-    ("bubble dismissal mutes murmurs", testPetBrainDismissedBubbleMutesMurmursForHours),
-    ("bubble hit testing keeps transparent gap click-through", testBubbleHitTestingDoesNotCaptureTransparentGap),
+    ("overlay hit testing makes whole pet body draggable", testOverlayHitTestingMakesWholePetBodyDraggable),
+    ("overlay right-click opens pet browser", testOverlayRightClickRequestsPetBrowser),
+    ("overlay keeps bubble through auto idle reset", testOverlayKeepsBubbleThroughAutoIdleReset),
+    ("pet package maps daemon ref without manifest parsing", testPetPackageMapsDaemonRefWithoutManifestParsing),
+    ("daemon snapshot decodes wire presentation", testDaemonSnapshotDecodesWirePresentation),
+    ("overlay keeps daemon done bubble across idle snapshot", testOverlayKeepsDaemonDoneBubbleAcrossIdleSnapshot),
+    ("debug state server is opt-in", testStateServerRequiresExplicitDebugFlag),
+    ("Petdex browser bridge action allowlist", testPetdexBrowserBridgeActionAllowlist),
+    ("installed pet payload uses asset scheme", testInstalledPetPayloadIsDataOnly),
+    ("update status maps daemon wire states", testUpdateStatusMapsWireStates),
+    ("bundled Go daemon Pi protocol socket", testBundledGoDaemonServesPiProtocolOverUnixSocket),
     ("mouse proximity dwell/cooldown", testMouseProximityRequiresDwellAndCooldown),
     ("focus + reduce motion", testFocusModeAndReduceMotionStayQuiet),
-    ("Codex events", testCodexEventsMapToEmotionsAndBubbles),
     ("click spam annoyed", testClickSpamBecomesAnnoyed),
     ("idle attention budget", testIdleAttentionBudgetCapsMicroIdle),
     ("long-running settle", testLongRunningSettlesToWaitingPose),
     ("manual animated states", testManualAnimatedStatesPlayOnce),
     ("double-click cooldown override", testDoubleClickOverridesSingleClickCooldown),
+    ("directional drag running loop", testDragUsesDirectionalRunningLoop),
     ("success during happy cooldown", testSuccessEventStillAppliesDuringHappyCooldown),
     ("reduce motion off resumes running", testReduceMotionOffResumesRunningPlayback),
     ("mouse leave resets dwell", testMouseLeavingRadiusResetsDwell),
