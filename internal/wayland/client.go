@@ -37,11 +37,11 @@ const (
 
 	opLayerShellGetLayerSurface = 0
 
-	opLayerSurfaceSetSize           = 0
-	opLayerSurfaceSetAnchor         = 1
-	opLayerSurfaceSetMargin         = 3
-	opLayerSurfaceSetKeyboardInter  = 4
-	opLayerSurfaceAckConfigure      = 6
+	opLayerSurfaceSetSize          = 0
+	opLayerSurfaceSetAnchor        = 1
+	opLayerSurfaceSetMargin        = 3
+	opLayerSurfaceSetKeyboardInter = 4
+	opLayerSurfaceAckConfigure     = 6
 
 	LayerTop     = 2
 	LayerOverlay = 3
@@ -51,8 +51,9 @@ const (
 	AnchorLeft   = 4
 	AnchorRight  = 8
 
-	// Linux input button code for the left mouse button.
-	BtnLeft = 272
+	// Linux input button codes for primary and context-click mouse buttons.
+	BtnLeft  = 272
+	BtnRight = 273
 )
 
 // Global is one wl_registry announcement.

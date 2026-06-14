@@ -133,6 +133,7 @@ const state = {
   catalog: [],
   installed: [],
   selected: null,
+  activePetId: "",
   activePetSlug: "",
   query: "",
   nativeReady: false,
@@ -214,7 +215,7 @@ function bindEvents() {
       const installedMatch = state.installed.find((pet) => pet.slug === selectedSlug);
       if (installedMatch) state.selected = installedMatch;
     }
-    chooseInitialPet();
+    if (!applyNativeSelection(event.detail)) chooseInitialPet();
     render();
   });
   window.addEventListener("codex-pets-native-installed-pets", (event) => {
@@ -226,7 +227,7 @@ function bindEvents() {
       const installedMatch = state.installed.find((pet) => pet.slug === selectedSlug);
       if (installedMatch) state.selected = installedMatch;
     }
-    chooseInitialPet();
+    if (!applyNativeSelection(event.detail)) chooseInitialPet();
     render();
   });
   window.addEventListener("codex-pets-native-import-result", (event) => {
@@ -389,6 +390,19 @@ function chooseInitialPet() {
     null;
 }
 
+function applyNativeSelection(detail) {
+  const selectedPetId = cleanString(detail?.selectedPetId || detail?.activePetId);
+  if (!selectedPetId) return false;
+  state.activePetId = selectedPetId;
+
+  const pet = allPets().find((candidate) => candidate.nativePetId === selectedPetId);
+  if (!pet) return false;
+
+  state.activePetSlug = pet.slug;
+  state.selected = pet;
+  return true;
+}
+
 function render() {
   renderList();
   renderSelected();
@@ -413,7 +427,7 @@ function renderList() {
     row.dataset.key = rowKey(pet);
     row.setAttribute("aria-selected", samePet(pet, state.selected) ? "true" : "false");
     row.classList.toggle("is-selected", samePet(pet, state.selected));
-    row.classList.toggle("is-active", pet.slug === state.activePetSlug);
+    row.classList.toggle("is-active", isActivePet(pet));
     row.querySelector(".pet-row-name").textContent = pet.displayName;
     row.querySelector(".pet-row-meta").textContent = rowMeta(pet);
     row.addEventListener("click", () => {
@@ -433,7 +447,8 @@ function updateListSelection() {
   for (const row of els.list.querySelectorAll(".pet-row")) {
     const selected = row.dataset.key === selectedKey;
     row.classList.toggle("is-selected", selected);
-    row.classList.toggle("is-active", row.dataset.slug === state.activePetSlug);
+    const pet = allPets().find((candidate) => row.dataset.key === rowKey(candidate));
+    row.classList.toggle("is-active", isActivePet(pet));
     row.setAttribute("aria-selected", selected ? "true" : "false");
   }
 }
@@ -494,7 +509,7 @@ function previewIdentity(pet) {
 
 function updateAction() {
   const pet = state.selected;
-  const isActive = pet && state.activePetSlug && pet.slug === state.activePetSlug;
+  const isActive = isActivePet(pet);
   const canUse =
     state.nativeReady &&
     !state.busy &&
@@ -557,7 +572,7 @@ function updatePiExtensionStatus() {
 
 function useSelectedPet() {
   if (!state.selected || state.busy) return;
-  if (state.selected.slug === state.activePetSlug) return;
+  if (isActivePet(state.selected)) return;
 
   if (state.selected.source === "installed") {
     if (!state.selected.nativePetId) return;
@@ -769,6 +784,14 @@ function samePet(left, right) {
       : left.source === right.source && left.slug === right.slug;
   }
   return left.source === right.source && left.slug === right.slug;
+}
+
+function isActivePet(pet) {
+  if (!pet) return false;
+  if (state.activePetId && pet.nativePetId) {
+    return pet.nativePetId === state.activePetId;
+  }
+  return Boolean(state.activePetSlug && pet.slug === state.activePetSlug);
 }
 
 function rowMeta(pet) {

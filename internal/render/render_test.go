@@ -191,6 +191,17 @@ func TestComposeFullFrame(t *testing.T) {
 	renderer := NewRenderer(1)
 	renderer.SetSheet(sheet)
 
+	spriteFrame, spriteRegions := renderer.Compose(Input{
+		StateID:    "running",
+		FrameIndex: 1,
+	})
+	// Sprite center shows the running row (row 7, col 1 -> {140,25,8}).
+	spriteOnly := spriteRegions.Visible[0]
+	center := spriteFrame.NRGBAAt((spriteOnly.Min.X+spriteOnly.Max.X)/2, (spriteOnly.Min.Y+spriteOnly.Max.Y)/2)
+	if center != (color.NRGBA{R: 140, G: 25, B: 8, A: 255}) {
+		t.Fatalf("sprite center = %+v", center)
+	}
+
 	frame, regions := renderer.Compose(Input{
 		StateID:        "running",
 		Bubble:         "Pi выполняет: сборка проекта",
@@ -207,11 +218,7 @@ func TestComposeFullFrame(t *testing.T) {
 	if alpha := frame.NRGBAAt(0, height-1).A; alpha != 0 {
 		t.Fatalf("corner alpha = %d, want 0", alpha)
 	}
-	// Sprite center shows the running row (row 7, col 1 → {140,25,8}).
-	center := frame.NRGBAAt(width/2, spriteLogicalTop+spriteLogicalHeight/2)
-	if center != (color.NRGBA{R: 140, G: 25, B: 8, A: 255}) {
-		t.Fatalf("sprite center = %+v", center)
-	}
+	sprite := regions.Visible[0]
 	// Bubble renders an opaque chip near the top.
 	if alpha := frame.NRGBAAt(width/2, 14).A; alpha == 0 {
 		t.Fatal("bubble chip is missing")
@@ -223,7 +230,7 @@ func TestComposeFullFrame(t *testing.T) {
 	if pillCenter.A == 0 {
 		t.Fatal("update pill is not drawn")
 	}
-	if !regions.Body.Overlaps(image.Rect(width/2-1, spriteLogicalTop, width/2+1, spriteLogicalTop+2)) {
+	if !regions.Body.Overlaps(sprite) {
 		t.Fatalf("body region %v does not cover the sprite", regions.Body)
 	}
 
@@ -236,6 +243,43 @@ func TestComposeFullFrame(t *testing.T) {
 	card := placeholder.NRGBAAt((placeholderRegions.Body.Min.X+placeholderRegions.Body.Max.X)/2, (placeholderRegions.Body.Min.Y+placeholderRegions.Body.Max.Y)/2)
 	if card.A == 0 {
 		t.Fatal("placeholder card is not drawn")
+	}
+}
+
+func TestComposeApprovalButtons(t *testing.T) {
+	renderer := NewRenderer(1)
+	frame, regions := renderer.Compose(Input{
+		StateID:           "waiting",
+		Bubble:            "Approval needed: git push origin main",
+		PendingApprovalID: "approval-1",
+	})
+
+	if regions.ApprovalID != "approval-1" {
+		t.Fatalf("approval id = %q, want approval-1", regions.ApprovalID)
+	}
+	if regions.ApprovalApprove.Empty() || regions.ApprovalDeny.Empty() {
+		t.Fatalf("approval button regions are empty: %+v", regions)
+	}
+	if len(regions.Visible) < 2 {
+		t.Fatalf("visible regions = %v, want sprite and bubble", regions.Visible)
+	}
+	bubble := regions.Visible[1]
+	if !regions.ApprovalApprove.In(bubble) || !regions.ApprovalDeny.In(bubble) {
+		t.Fatalf("buttons %v %v should be inside bubble %v", regions.ApprovalApprove, regions.ApprovalDeny, bubble)
+	}
+	approveCenter := image.Pt(
+		(regions.ApprovalApprove.Min.X+regions.ApprovalApprove.Max.X)/2,
+		(regions.ApprovalApprove.Min.Y+regions.ApprovalApprove.Max.Y)/2,
+	)
+	denyCenter := image.Pt(
+		(regions.ApprovalDeny.Min.X+regions.ApprovalDeny.Max.X)/2,
+		(regions.ApprovalDeny.Min.Y+regions.ApprovalDeny.Max.Y)/2,
+	)
+	if alpha := frame.NRGBAAt(approveCenter.X, approveCenter.Y).A; alpha == 0 {
+		t.Fatal("approve button is not drawn")
+	}
+	if alpha := frame.NRGBAAt(denyCenter.X, denyCenter.Y).A; alpha == 0 {
+		t.Fatal("deny button is not drawn")
 	}
 }
 

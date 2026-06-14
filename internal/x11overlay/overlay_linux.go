@@ -259,6 +259,7 @@ import (
 	"unsafe"
 
 	"codex-pets/internal/overlayhost"
+	"codex-pets/internal/protocol"
 	"codex-pets/internal/render"
 )
 
@@ -330,12 +331,30 @@ func (b *Backend) Pump() []overlayhost.Event {
 		}
 		switch event.event_type {
 		case C.PET_EVENT_BUTTON_PRESS:
+			if event.button == 3 {
+				if routeContextPress(b.regions, int(event.x), int(event.y)) == actionBrowser {
+					events = append(events, overlayhost.Event{Kind: overlayhost.EventPetBrowserRequest})
+				}
+				continue
+			}
 			if event.button != 1 {
 				continue
 			}
 			switch routeButtonPress(b.regions, int(event.x), int(event.y)) {
 			case actionUpdate:
 				events = append(events, overlayhost.Event{Kind: overlayhost.EventPillPress})
+			case actionApprove:
+				events = append(events, overlayhost.Event{
+					Kind:             overlayhost.EventApprovalDecision,
+					ApprovalID:       b.regions.ApprovalID,
+					ApprovalDecision: protocol.ApprovalApproved,
+				})
+			case actionDeny:
+				events = append(events, overlayhost.Event{
+					Kind:             overlayhost.EventApprovalDecision,
+					ApprovalID:       b.regions.ApprovalID,
+					ApprovalDecision: protocol.ApprovalDenied,
+				})
 			case actionDrag:
 				b.pressed = true
 				b.moved = false
@@ -480,6 +499,9 @@ func (w *window) applyShape(regions render.Regions) {
 	if regions.UpdateAction != render.UpdateActionNone && !regions.UpdatePill.Empty() {
 		input = append(input, regions.UpdatePill)
 	}
+	if regions.ApprovalID != "" {
+		input = append(input, regions.ApprovalApprove, regions.ApprovalDeny)
+	}
 	w.setShape(input, func(rects *C.XRectangle, count C.int) {
 		C.pet_x11_set_input_shape(w.pet, rects, count)
 	})
@@ -509,15 +531,15 @@ func (w *window) setShape(rects []image.Rectangle, apply func(*C.XRectangle, C.i
 	apply(&xrects[0], C.int(len(xrects)))
 }
 
-// autoScale rounds the detected DPI factor to quarter steps within [1, 3].
+// autoScale applies the macOS "Normal" pet size to the detected X screen DPI.
 func autoScale() float64 {
-	scale := float64(C.pet_x11_auto_scale())
-	scale = math.Round(scale*4) / 4
-	if scale < 1 {
-		return 1
+	scale := render.DefaultScale * float64(C.pet_x11_auto_scale())
+	scale = math.Round(scale*100) / 100
+	if scale < render.MinScale {
+		return render.MinScale
 	}
-	if scale > 3 {
-		return 3
+	if scale > render.MaxScale {
+		return render.MaxScale
 	}
 	return scale
 }

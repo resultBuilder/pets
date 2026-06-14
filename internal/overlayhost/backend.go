@@ -3,6 +3,7 @@ package overlayhost
 import (
 	"image"
 
+	"codex-pets/internal/protocol"
 	"codex-pets/internal/render"
 )
 
@@ -22,6 +23,10 @@ const (
 	EventRelease
 	// EventPillPress: the update pill was clicked.
 	EventPillPress
+	// EventPetBrowserRequest: the pet body was right-clicked.
+	EventPetBrowserRequest
+	// EventApprovalDecision: an approval bubble action was clicked.
+	EventApprovalDecision
 	// EventRedraw: the backend lost its contents and needs a re-present.
 	EventRedraw
 	// EventScaleChanged: the output scale changed; Scale carries the new
@@ -30,11 +35,13 @@ const (
 )
 
 type Event struct {
-	Kind  EventKind
-	DX    int
-	DY    int
-	Moved bool
-	Scale float64
+	Kind             EventKind
+	DX               int
+	DY               int
+	Moved            bool
+	Scale            float64
+	ApprovalID       string
+	ApprovalDecision protocol.ApprovalState
 }
 
 // Backend is a native windowing surface for the pet overlay.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"codex-pets/internal/overlayhost"
+	"codex-pets/internal/protocol"
 	"codex-pets/internal/render"
 	"codex-pets/internal/wayland"
 )
@@ -132,13 +133,13 @@ func (b *Backend) Open(userScale float64) (float64, error) {
 
 	renderScale := b.userScale
 	if renderScale <= 0 {
-		renderScale = float64(b.maxScale)
+		renderScale = render.DefaultScale * float64(b.maxScale)
 	}
-	if renderScale < 1 {
-		renderScale = 1
+	if renderScale < render.MinScale {
+		renderScale = render.MinScale
 	}
-	if renderScale > 3 {
-		renderScale = 3
+	if renderScale > render.MaxScale {
+		renderScale = render.MaxScale
 	}
 	b.bufferScale = 1
 	if renderScale == math.Trunc(renderScale) {
@@ -308,6 +309,12 @@ func (b *Backend) pointerEvent(opcode uint16, r *wayland.Reader) {
 		_ = r.Uint()
 		button := r.Uint()
 		state := r.Uint()
+		if button == wayland.BtnRight {
+			if state == 1 {
+				b.handleContextPress()
+			}
+			return
+		}
 		if button != wayland.BtnLeft {
 			return
 		}
@@ -320,10 +327,36 @@ func (b *Backend) pointerEvent(opcode uint16, r *wayland.Reader) {
 	}
 }
 
+func (b *Backend) handleContextPress() {
+	x := int(math.Round(b.pointerX * float64(b.bufferScale)))
+	y := int(math.Round(b.pointerY * float64(b.bufferScale)))
+	if image.Pt(x, y).In(b.regions.Body) {
+		b.pending = append(b.pending, overlayhost.Event{Kind: overlayhost.EventPetBrowserRequest})
+	}
+}
+
 func (b *Backend) handlePress() {
 	x := int(math.Round(b.pointerX * float64(b.bufferScale)))
 	y := int(math.Round(b.pointerY * float64(b.bufferScale)))
 	point := image.Pt(x, y)
+	if b.regions.ApprovalID != "" {
+		if point.In(b.regions.ApprovalApprove) {
+			b.pending = append(b.pending, overlayhost.Event{
+				Kind:             overlayhost.EventApprovalDecision,
+				ApprovalID:       b.regions.ApprovalID,
+				ApprovalDecision: protocol.ApprovalApproved,
+			})
+			return
+		}
+		if point.In(b.regions.ApprovalDeny) {
+			b.pending = append(b.pending, overlayhost.Event{
+				Kind:             overlayhost.EventApprovalDecision,
+				ApprovalID:       b.regions.ApprovalID,
+				ApprovalDecision: protocol.ApprovalDenied,
+			})
+			return
+		}
+	}
 	if b.regions.UpdateAction != render.UpdateActionNone && point.In(b.regions.UpdatePill) {
 		b.pending = append(b.pending, overlayhost.Event{Kind: overlayhost.EventPillPress})
 		return
@@ -434,6 +467,10 @@ func (b *Backend) SetRegions(regions render.Regions) {
 	addRect(regions.Body)
 	if regions.UpdateAction != render.UpdateActionNone {
 		addRect(regions.UpdatePill)
+	}
+	if regions.ApprovalID != "" {
+		addRect(regions.ApprovalApprove)
+		addRect(regions.ApprovalDeny)
 	}
 	_ = conn.Request(b.surface, 5, wayland.Obj(region)) // set_input_region
 	_ = conn.Request(region, 0)                         // destroy (surface keeps a copy)

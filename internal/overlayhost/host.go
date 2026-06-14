@@ -12,11 +12,49 @@ import (
 	"codex-pets/internal/render"
 )
 
+// Options configures host-level actions that are outside the overlay renderer.
+type Options struct {
+	OnPetBrowserRequested func()
+}
+
+type playbackMode int
+
+const (
+	playbackStatic playbackMode = iota
+	playbackPlayOnce
+	playbackLoop
+)
+
+type animationKey struct {
+	stateID  string
+	playback playbackMode
+}
+
+func playbackForState(stateID string, transient bool) playbackMode {
+	switch stateID {
+	case "idle":
+		if transient {
+			return playbackPlayOnce
+		}
+		return playbackStatic
+	case "waving", "jumping", "failed", "waiting", "review":
+		return playbackPlayOnce
+	default:
+		return playbackLoop
+	}
+}
+
 // Run drives a pet overlay on any Backend: it subscribes to daemon
 // snapshots, composes frames with the shared renderer, paces animations,
 // relays interactions, and handles the update pill. Backends only translate
 // native windowing events and blit frames.
 func Run(ctx context.Context, socketPath string, backend Backend, userScale float64) error {
+	return RunWithOptions(ctx, socketPath, backend, userScale, Options{})
+}
+
+// RunWithOptions is Run plus host callbacks for actions such as opening the
+// Petdex browser.
+func RunWithOptions(ctx context.Context, socketPath string, backend Backend, userScale float64, options Options) error {
 	renderScale, err := backend.Open(userScale)
 	if err != nil {
 		return err
@@ -31,6 +69,7 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 	var updateState *protocol.UpdateState
 	var regions render.Regions
 	frameIndex := 0
+	playOnceDone := false
 	relaunchScheduled := false
 	requestedFirstCheck := false
 	regionsApplied := false
@@ -41,14 +80,17 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 	var localPoseUntil time.Time
 	interactionResults := make(chan protocol.InteractionResult, 4)
 
-	currentState := func() string {
+	currentAnimation := func() animationKey {
 		if dragActive {
-			return dragState
+			return animationKey{stateID: dragState, playback: playbackLoop}
 		}
 		if localPose != "" && time.Now().Before(localPoseUntil) {
-			return localPose
+			return animationKey{stateID: localPose, playback: playbackForState(localPose, true)}
 		}
-		return presentation.StateID
+		return animationKey{stateID: presentation.StateID, playback: playbackForState(presentation.StateID, false)}
+	}
+	currentState := func() string {
+		return currentAnimation().stateID
 	}
 
 	frameTimer := time.NewTimer(render.StateByID(currentState()).FrameDuration)
@@ -75,12 +117,17 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 	defer cancelBubbleClear()
 
 	renderFrame := func() {
+		index := frameIndex
+		if currentAnimation().playback == playbackStatic {
+			index = 0
+		}
 		frame, next := renderer.Compose(render.Input{
-			StateID:        currentState(),
-			Bubble:         presentation.Bubble,
-			ActiveSessions: len(presentation.ActiveSessionIDs),
-			Update:         updateState,
-			FrameIndex:     frameIndex,
+			StateID:           currentState(),
+			Bubble:            presentation.Bubble,
+			PendingApprovalID: presentation.PendingApprovalID,
+			ActiveSessions:    len(presentation.ActiveSessionIDs),
+			Update:            updateState,
+			FrameIndex:        index,
 		})
 		backend.Present(frame)
 		if !regionsApplied || !regions.Equal(next) {
@@ -90,11 +137,12 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 		}
 	}
 
-	resetAnimation := func(previous string) {
-		if currentState() == previous {
+	resetAnimation := func(previous animationKey) {
+		if currentAnimation() == previous {
 			return
 		}
 		frameIndex = 0
+		playOnceDone = false
 		if !frameTimer.Stop() {
 			select {
 			case <-frameTimer.C:
@@ -118,7 +166,7 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 	}
 
 	handleEvents := func() {
-		previous := currentState()
+		previous := currentAnimation()
 		changed := false
 		for _, event := range backend.Pump() {
 			switch event.Kind {
@@ -156,6 +204,23 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 					method = protocol.MethodUpdateDismiss
 				}
 				go sendRequestOnce(socketPath, method)
+			case EventPetBrowserRequest:
+				if options.OnPetBrowserRequested != nil {
+					go options.OnPetBrowserRequested()
+				}
+			case EventApprovalDecision:
+				if event.ApprovalID == "" {
+					continue
+				}
+				reason := "Approved from pet overlay"
+				if event.ApprovalDecision == protocol.ApprovalDenied {
+					reason = "Denied from pet overlay"
+				}
+				go sendPayloadOnce(socketPath, protocol.MethodApprovalRespond, map[string]any{
+					"approvalId": event.ApprovalID,
+					"decision":   event.ApprovalDecision,
+					"reason":     reason,
+				})
 			case EventRedraw:
 				changed = true
 			case EventScaleChanged:
@@ -179,7 +244,7 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 		case <-ctx.Done():
 			return ctx.Err()
 		case snapshot := <-snapshots:
-			previous := currentState()
+			previous := currentAnimation()
 			next := overlay.Present(snapshot)
 			if next.SelectedPetPath != presentation.SelectedPetPath {
 				sheet, err := render.LoadSpriteSheet(next.SelectedPetPath)
@@ -212,7 +277,7 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 			resetAnimation(previous)
 			renderFrame()
 		case result := <-interactionResults:
-			previous := currentState()
+			previous := currentAnimation()
 			if result.StateID != "" && result.DurationSeconds > 0 {
 				localPose = result.StateID
 				localPoseUntil = time.Now().Add(time.Duration(result.DurationSeconds * float64(time.Second)))
@@ -228,7 +293,22 @@ func Run(ctx context.Context, socketPath string, backend Backend, userScale floa
 			presentation.Bubble = ""
 			renderFrame()
 		case <-frameTimer.C:
-			frameIndex++
+			switch currentAnimation().playback {
+			case playbackStatic:
+				frameIndex = 0
+			case playbackPlayOnce:
+				state := render.StateByID(currentState())
+				if playOnceDone {
+					frameIndex = 0
+				} else if frameIndex >= state.Frames-1 {
+					frameIndex = 0
+					playOnceDone = true
+				} else {
+					frameIndex++
+				}
+			default:
+				frameIndex++
+			}
 			frameTimer.Reset(render.StateByID(currentState()).FrameDuration)
 			renderFrame()
 		case <-eventTicker.C:

@@ -7,6 +7,7 @@
     "test:pi-extension": "node --experimental-strip-types --test pi-extension/*.test.ts",
     "test:browser-smoke": "node scripts/browser-smoke.mjs",
     "test:macos-gui-smoke": "node scripts/macos-gui-smoke.mjs",
+    "test:linux-gui-smoke": "node scripts/linux-gui-smoke.mjs",
     "dump:petdex": "node scripts/dump-petdex.mjs",
     "test": "npm run test:go && npm run test:pi-extension"
   }

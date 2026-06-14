@@ -6,9 +6,11 @@
 
 ## Сборка
 
-Нужны: Go ≥ 1.25, gcc, `pkg-config`, `libx11-dev`, `libxext-dev`
-(на Fedora: `libX11-devel`, `libXext-devel`). Wayland-бэкенд — чистый Go,
-ему C-библиотеки не нужны.
+Нужны: Go ≥ 1.25, gcc, `pkg-config`, `libx11-dev`, `libxext-dev`,
+GTK 3 и WebKitGTK 4.1 или 4.0 development packages (на Fedora:
+`libX11-devel`, `libXext-devel`, `gtk3-devel`, `webkit2gtk4.1-devel`
+или `webkit2gtk4.0-devel`). Wayland-бэкенд — чистый Go, но Petdex browser
+собирается через GTK/WebKitGTK.
 
 ```sh
 sh linux/build.sh
@@ -25,7 +27,9 @@ sh linux/build.sh
 ```
 
 Какой бэкенд выбран — печатается при старте. Полезные флаги: `-scale 2`
-(если автоопределение HiDPI промахнулось), `-pets-dir <dir>` (свои петы).
+(если автоопределение HiDPI промахнулось), `-pets-dir <dir>` (свои петы),
+`-open-petdex` (открыть браузер при старте), `-petdex-only` (только браузер
+для smoke-тестов).
 
 ## Что проверить
 
@@ -43,6 +47,9 @@ sh linux/build.sh
 - [ ] **Pi-интеграция**: `./build/linux/pi-pet-overlay -install-pi-extension`,
       затем запустить `pi` в любом репо — пет бежит во время работы агента,
       просит подтверждение на рискованные команды, машет по завершении.
+- [ ] **Petdex**: right-click по телу пета открывает браузер; `Use` выбирает
+      установленного пета, `Install to Pi`/`Uninstall Pi` меняют статус Pi
+      extension. Для прямой проверки: `./build/linux/pi-pet-overlay -petdex-only`.
 - [ ] **Самообновление**: при новых коммитах в чекауте появляется плашка
       «Update available — click»; клик пересобирает и перезапускает.
 

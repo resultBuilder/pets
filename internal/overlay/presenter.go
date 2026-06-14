@@ -9,12 +9,13 @@ import (
 // Presentation is the renderer-facing view used by Go overlay clients. It
 // extends the wire presentation with the resolved selected pet.
 type Presentation struct {
-	StateID          string
-	Bubble           string
-	AutoClearSeconds float64
-	SelectedPetID    string
-	SelectedPetPath  string
-	ActiveSessionIDs []string
+	StateID           string
+	Bubble            string
+	AutoClearSeconds  float64
+	PendingApprovalID string
+	SelectedPetID     string
+	SelectedPetPath   string
+	ActiveSessionIDs  []string
 }
 
 // BuildPresentation derives the canonical wire presentation for a snapshot.
@@ -56,13 +57,23 @@ func Present(snapshot protocol.Snapshot) Presentation {
 	}
 	selected := selectedPet(snapshot)
 	return Presentation{
-		StateID:          wire.StateID,
-		Bubble:           wire.Bubble,
-		AutoClearSeconds: wire.AutoClearSeconds,
-		SelectedPetID:    selected.ID,
-		SelectedPetPath:  selected.Path,
-		ActiveSessionIDs: wire.ActiveSessionIDs,
+		StateID:           wire.StateID,
+		Bubble:            wire.Bubble,
+		AutoClearSeconds:  wire.AutoClearSeconds,
+		PendingApprovalID: pendingApprovalID(snapshot.PendingApprovals),
+		SelectedPetID:     selected.ID,
+		SelectedPetPath:   selected.Path,
+		ActiveSessionIDs:  wire.ActiveSessionIDs,
 	}
+}
+
+func pendingApprovalID(approvals []protocol.PendingApproval) string {
+	for _, approval := range approvals {
+		if approval.State == protocol.ApprovalPending {
+			return approval.ID
+		}
+	}
+	return ""
 }
 
 func selectedPet(snapshot protocol.Snapshot) protocol.PetRef {

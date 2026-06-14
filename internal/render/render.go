@@ -13,12 +13,20 @@ import (
 
 // Logical layout units; every metric is multiplied by the renderer scale.
 const (
-	LogicalWidth  = 240
-	LogicalHeight = 300
+	DefaultScale = 0.76
+	MinScale     = 0.58
+	MaxScale     = 3
 
-	spriteLogicalWidth  = 154
-	spriteLogicalHeight = 166
-	spriteLogicalTop    = 92
+	LogicalWidth  = 190
+	LogicalHeight = 235
+
+	spriteScaleFactor   = 0.72
+	spriteDefaultWidth  = 192
+	spriteDefaultHeight = 208
+	spriteBottomInset   = 18
+	spriteLogicalWidth  = 138
+	spriteLogicalHeight = 150
+	spriteLogicalTop    = LogicalHeight - spriteLogicalHeight - spriteBottomInset
 )
 
 // UpdateAction is what a click on the update pill should trigger.
@@ -32,26 +40,35 @@ const (
 
 // Input is the renderer-agnostic description of one frame.
 type Input struct {
-	StateID        string
-	Bubble         string
-	ActiveSessions int
-	Update         *protocol.UpdateState
-	FrameIndex     int
+	StateID           string
+	Bubble            string
+	PendingApprovalID string
+	ActiveSessions    int
+	Update            *protocol.UpdateState
+	FrameIndex        int
 }
 
 // Regions reports interactive areas in buffer coordinates. Everything
 // outside them is click-through for the windowing layer. Visible lists every
 // painted area so non-composited hosts can shape the window outline to it.
 type Regions struct {
-	Body         image.Rectangle
-	UpdatePill   image.Rectangle
-	UpdateAction UpdateAction
-	Visible      []image.Rectangle
+	Body            image.Rectangle
+	UpdatePill      image.Rectangle
+	UpdateAction    UpdateAction
+	ApprovalID      string
+	ApprovalApprove image.Rectangle
+	ApprovalDeny    image.Rectangle
+	Visible         []image.Rectangle
 }
 
 // Equal reports whether two region sets describe the same geometry.
 func (r Regions) Equal(other Regions) bool {
-	if r.Body != other.Body || r.UpdatePill != other.UpdatePill || r.UpdateAction != other.UpdateAction {
+	if r.Body != other.Body ||
+		r.UpdatePill != other.UpdatePill ||
+		r.UpdateAction != other.UpdateAction ||
+		r.ApprovalID != other.ApprovalID ||
+		r.ApprovalApprove != other.ApprovalApprove ||
+		r.ApprovalDeny != other.ApprovalDeny {
 		return false
 	}
 	if len(r.Visible) != len(other.Visible) {
@@ -75,11 +92,14 @@ type Renderer struct {
 }
 
 func NewRenderer(scale float64) *Renderer {
-	if scale < 1 {
-		scale = 1
+	if scale <= 0 {
+		scale = DefaultScale
 	}
-	if scale > 3 {
-		scale = 3
+	if scale < MinScale {
+		scale = MinScale
+	}
+	if scale > MaxScale {
+		scale = MaxScale
 	}
 	return &Renderer{
 		scale: scale,
@@ -88,7 +108,9 @@ func NewRenderer(scale float64) *Renderer {
 }
 
 func (r *Renderer) Size() (int, int) {
-	return r.s(LogicalWidth), r.s(LogicalHeight)
+	width := max(LogicalWidth, int(170*r.scale+50+0.5))
+	height := max(LogicalHeight, int(190*r.scale+80+0.5))
+	return width, height
 }
 
 func (r *Renderer) SetSheet(sheet *SpriteSheet) {
@@ -124,8 +146,9 @@ func (r *Renderer) Compose(in Input) (*image.NRGBA, Regions) {
 	}
 	clear(r.buf.Pix)
 
-	spriteRect := image.Rect(0, 0, r.s(spriteLogicalWidth), r.s(spriteLogicalHeight)).
-		Add(image.Pt((width-r.s(spriteLogicalWidth))/2, r.s(spriteLogicalTop)))
+	spriteWidth, spriteHeight := r.spriteSize()
+	spriteRect := image.Rect(0, 0, spriteWidth, spriteHeight).
+		Add(image.Pt((width-spriteWidth)/2, height-spriteHeight-spriteBottomInset))
 	if r.sheet != nil {
 		frame := r.sheet.Frame(in.StateID, in.FrameIndex, spriteRect.Dx(), spriteRect.Dy())
 		draw.Draw(r.buf, spriteRect, frame, image.Point{}, draw.Over)
@@ -139,8 +162,14 @@ func (r *Renderer) Compose(in Input) (*image.NRGBA, Regions) {
 	}
 
 	if in.Bubble != "" {
-		if rect := r.drawBubble(in.Bubble, width); !rect.Empty() {
+		rect, approve, deny := r.drawBubble(in.Bubble, width, in.PendingApprovalID != "")
+		if !rect.Empty() {
 			regions.Visible = append(regions.Visible, rect)
+			if in.PendingApprovalID != "" && !approve.Empty() && !deny.Empty() {
+				regions.ApprovalID = in.PendingApprovalID
+				regions.ApprovalApprove = approve
+				regions.ApprovalDeny = deny
+			}
 		}
 	}
 
@@ -162,6 +191,17 @@ func (r *Renderer) Compose(in Input) (*image.NRGBA, Regions) {
 	return r.buf, regions
 }
 
+func (r *Renderer) spriteSize() (int, int) {
+	frameWidth := spriteDefaultWidth
+	frameHeight := spriteDefaultHeight
+	if r.sheet != nil {
+		frameWidth = r.sheet.frameWidth
+		frameHeight = r.sheet.frameHeight
+	}
+	return int(float64(frameWidth)*spriteScaleFactor*r.scale + 0.5),
+		int(float64(frameHeight)*spriteScaleFactor*r.scale + 0.5)
+}
+
 func (r *Renderer) drawMissingPetCard(rect image.Rectangle) {
 	fillRoundedRect(r.buf, rect, r.s(14), color.NRGBA{R: 236, G: 240, B: 246, A: 235})
 	face := r.face(14)
@@ -181,16 +221,16 @@ func (r *Renderer) drawMissingPetCard(rect image.Rectangle) {
 	drawText(r.buf, small, hintX, titleY+lineHeight(small)+r.s(4), hint, color.NRGBA{R: 128, G: 136, B: 148, A: 255})
 }
 
-func (r *Renderer) drawBubble(text string, width int) image.Rectangle {
+func (r *Renderer) drawBubble(text string, width int, approvalActions bool) (image.Rectangle, image.Rectangle, image.Rectangle) {
 	face := r.face(12)
 	if face == nil {
-		return image.Rectangle{}
+		return image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	}
 	padX, padY := r.s(10), r.s(7)
 	maxTextWidth := r.s(LogicalWidth-16) - 2*padX
 	lines := wrapText(face, text, maxTextWidth, 3)
 	if len(lines) == 0 {
-		return image.Rectangle{}
+		return image.Rectangle{}, image.Rectangle{}, image.Rectangle{}
 	}
 	widest := 0
 	for _, line := range lines {
@@ -199,14 +239,58 @@ func (r *Renderer) drawBubble(text string, width int) image.Rectangle {
 		}
 	}
 	chipWidth := widest + 2*padX
+	if approvalActions {
+		minWidth := r.s(164)
+		maxWidth := width - r.s(18)
+		if maxWidth < minWidth {
+			minWidth = maxWidth
+		}
+		if chipWidth < minWidth {
+			chipWidth = minWidth
+		}
+		if chipWidth > maxWidth {
+			chipWidth = maxWidth
+		}
+	}
 	chipHeight := len(lines)*lineHeight(face) + 2*padY
+	if approvalActions {
+		chipHeight += r.s(34)
+	}
 	rect := image.Rect(0, 0, chipWidth, chipHeight).Add(image.Pt((width-chipWidth)/2, r.s(6)))
 	fillRoundedRect(r.buf, rect, r.s(10), color.NRGBA{R: 255, G: 255, B: 255, A: 242})
 	textColor := color.NRGBA{R: 32, G: 38, B: 46, A: 255}
 	for index, line := range lines {
 		drawText(r.buf, face, rect.Min.X+padX, rect.Min.Y+padY+index*lineHeight(face)+ascent(face), line, textColor)
 	}
-	return rect
+	if !approvalActions {
+		return rect, image.Rectangle{}, image.Rectangle{}
+	}
+
+	gap := r.s(8)
+	buttonHeight := r.s(22)
+	innerWidth := max(0, rect.Dx()-r.s(22))
+	buttonWidth := max(r.s(48), (innerWidth-gap)/2)
+	y := rect.Max.Y - buttonHeight - r.s(6)
+	approve := image.Rect(rect.Min.X+r.s(11), y, rect.Min.X+r.s(11)+buttonWidth, y+buttonHeight)
+	deny := approve.Add(image.Pt(buttonWidth+gap, 0))
+	r.drawApprovalButton("Approve", approve, color.NRGBA{R: 20, G: 122, B: 71, A: 255})
+	r.drawApprovalButton("Deny", deny, color.NRGBA{R: 46, G: 46, B: 46, A: 255})
+	return rect, approve, deny
+}
+
+func (r *Renderer) drawApprovalButton(text string, rect image.Rectangle, background color.NRGBA) {
+	rect = rect.Intersect(r.buf.Bounds())
+	if rect.Empty() {
+		return
+	}
+	fillRoundedRect(r.buf, rect, r.s(6), background)
+	face := r.face(10)
+	if face == nil {
+		return
+	}
+	x := rect.Min.X + (rect.Dx()-textWidth(face, text))/2
+	y := rect.Min.Y + (rect.Dy()-lineHeight(face))/2 + ascent(face)
+	drawText(r.buf, face, x, y, text, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 }
 
 func (r *Renderer) drawChip(text string, logicalFontSize int, width int, bottom int, background color.NRGBA, textColor color.NRGBA) image.Rectangle {

@@ -1,10 +1,12 @@
 package waylandoverlay
 
 import (
+	"image"
 	"testing"
 	"time"
 
 	"codex-pets/internal/overlayhost"
+	"codex-pets/internal/protocol"
 	"codex-pets/internal/render"
 	"codex-pets/internal/wayland"
 	"codex-pets/internal/wayland/wltest"
@@ -51,8 +53,8 @@ func TestBackendOpensPresentsAndTranslatesPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scale != 1 {
-		t.Fatalf("render scale = %v, want 1 (mock output scale 1)", scale)
+	if scale != render.DefaultScale {
+		t.Fatalf("render scale = %v, want %v (mock output scale 1)", scale, render.DefaultScale)
 	}
 	if margins := mock.Margins(); margins != [4]int32{0, 32, 64, 0} {
 		t.Fatalf("initial margins = %v", margins)
@@ -112,4 +114,86 @@ func TestBackendOpensPresentsAndTranslatesPointer(t *testing.T) {
 	}
 
 	backend.Close()
+}
+
+func TestBackendRightClickRequestsPetBrowser(t *testing.T) {
+	clientEnd, serverEnd := wltest.SocketPair(t)
+	defer clientEnd.Close()
+	defer serverEnd.Close()
+	mock := wltest.NewCompositor(t, serverEnd)
+	go mock.Serve()
+
+	backend := NewWithConnect(func() (*wayland.Client, error) {
+		return wayland.Handshake(wayland.NewConn(clientEnd))
+	})
+	scale, err := backend.Open(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	renderer := render.NewRenderer(scale)
+	frame, regions := renderer.Compose(render.Input{StateID: "idle"})
+	backend.Present(frame)
+	backend.SetRegions(regions)
+	if err := backend.client.Conn.RoundTrip(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "pointer object", func() bool { return mock.BoundID("__pointer") != 0 })
+
+	pointer := mock.BoundID("__pointer")
+	surface := mock.BoundID("__surface")
+	bodyX := float64((regions.Body.Min.X + regions.Body.Max.X) / 2)
+	bodyY := float64((regions.Body.Min.Y + regions.Body.Max.Y) / 2)
+	mock.SendEvent(pointer, 0, wayland.Uint(1), wayland.Obj(surface), wayland.Fixed(bodyX), wayland.Fixed(bodyY))
+	mock.SendEvent(pointer, 3, wayland.Uint(2), wayland.Uint(0), wayland.Uint(wayland.BtnRight), wayland.Uint(1))
+
+	events := pumpUntil(t, backend, "browser request", func(events []overlayhost.Event) bool {
+		for _, event := range events {
+			if event.Kind == overlayhost.EventPetBrowserRequest {
+				return true
+			}
+		}
+		return false
+	})
+	if events[len(events)-1].Kind != overlayhost.EventPetBrowserRequest {
+		t.Fatalf("last event = %+v, want browser request", events[len(events)-1])
+	}
+}
+
+func TestBackendApprovalButtonsEmitDecision(t *testing.T) {
+	backend := &Backend{
+		bufferScale: 1,
+		regions: render.Regions{
+			Body:            image.Rect(0, 0, 100, 100),
+			ApprovalID:      "approval-1",
+			ApprovalApprove: image.Rect(20, 20, 60, 42),
+			ApprovalDeny:    image.Rect(66, 20, 106, 42),
+		},
+	}
+
+	backend.pointerX = 30
+	backend.pointerY = 30
+	backend.handlePress()
+	if len(backend.pending) != 1 {
+		t.Fatalf("pending events = %+v, want one approve decision", backend.pending)
+	}
+	if got := backend.pending[0]; got.Kind != overlayhost.EventApprovalDecision ||
+		got.ApprovalID != "approval-1" ||
+		got.ApprovalDecision != protocol.ApprovalApproved {
+		t.Fatalf("approve event = %+v", got)
+	}
+
+	backend.pending = nil
+	backend.pointerX = 80
+	backend.pointerY = 30
+	backend.handlePress()
+	if len(backend.pending) != 1 {
+		t.Fatalf("pending events = %+v, want one deny decision", backend.pending)
+	}
+	if got := backend.pending[0]; got.Kind != overlayhost.EventApprovalDecision ||
+		got.ApprovalID != "approval-1" ||
+		got.ApprovalDecision != protocol.ApprovalDenied {
+		t.Fatalf("deny event = %+v", got)
+	}
 }

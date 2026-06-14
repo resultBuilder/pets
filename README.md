@@ -189,6 +189,13 @@ sh linux/build.sh
 ./build/linux/pi-pet-overlay
 ```
 
+Right-click the pet body to open the native WebKitGTK Petdex picker. For scripted checks or direct launch, use:
+
+```sh
+./build/linux/pi-pet-overlay -open-petdex
+./build/linux/pi-pet-overlay -petdex-only
+```
+
 Install the Pi extension from the Linux build with:
 
 ```sh
@@ -210,6 +217,7 @@ npm test
 node --check app.js
 npm run test:browser-smoke
 npm run test:macos-gui-smoke
+npm run test:linux-gui-smoke
 sh macos/CodexPets/test.sh
 sh macos/CodexPets/build.sh
 env GOCACHE=/tmp/codex-pets-go-build GOOS=linux CGO_ENABLED=0 go build -o /tmp/pi-pet-overlay-check ./cmd/pi-pet-overlay
@@ -236,8 +244,8 @@ Latest checkpoint results on macOS:
 ## Platform Limitations
 
 - The macOS AppKit app supervises the bundled Go daemon as a child process, subscribes to it through the same local protocol path as external clients, and maps daemon attention states to native pet states. The daemon's stdout/stderr land in `~/Library/Application Support/CodexPets/Runtime/pi-pet-daemon.log`. The older local HTTP state API remains as an opt-in debug compatibility path.
-- The Linux overlay builds with `sh linux/build.sh` after installing `pkg-config`, `libx11-dev`, and `libxext-dev` (`libX11-devel`/`libXext-devel` on Fedora) — the X11 backend needs them at build time; the Wayland backend is pure Go. On Wayland sessions with layer-shell (Sway, Hyprland, KDE Plasma, wlroots compositors) the pet runs natively with first-class transparency and stacking; on GNOME it falls back to XWayland automatically. The binary also supports `-install-pi-extension`/`-uninstall-pi-extension` for `~/.pi/agent/extensions/codex-pets.ts`. Frame composition (PNG and WebP atlases, animation table, bubble/pill layout, UTF-8 incl. Cyrillic text) lives in `internal/render` and is covered by display-server-free tests; backends are only event loops plus buffer upload.
-- The WebView picker can preview Petdex spritesheets, import Petdex pets in the macOS shell, show Pi extension status, install/uninstall the Pi extension, list installed pets through the native bridge, and select installed pets. The local rendered browser smoke covers those bridge-driven flows in headless Chrome. The macOS GUI smoke covers the real AppKit app's in-process daemon socket and native overlay-state mapping without requiring live Pi inference.
+- The Linux overlay builds with `sh linux/build.sh` after installing `pkg-config`, `libx11-dev`, `libxext-dev`, GTK 3, and WebKitGTK 4.1 or 4.0 development files (`libX11-devel`, `libXext-devel`, `gtk3-devel`, and `webkit2gtk4.1-devel`/`webkit2gtk4.0-devel` on Fedora) — the X11 backend and Petdex browser need them at build time; the Wayland backend itself is pure Go. On Wayland sessions with layer-shell (Sway, Hyprland, KDE Plasma, wlroots compositors) the pet runs natively with first-class transparency and stacking; on GNOME it falls back to XWayland automatically. The binary also supports `-install-pi-extension`/`-uninstall-pi-extension` for `~/.pi/agent/extensions/codex-pets.ts`. Frame composition (PNG and WebP atlases, animation table, bubble/pill layout, UTF-8 incl. Cyrillic text) lives in `internal/render` and is covered by display-server-free tests; backends are only event loops plus buffer upload.
+- The WebView picker can preview Petdex spritesheets, import/select pets, show Pi extension status, and install/uninstall the Pi extension in both the macOS WebKit shell and the Linux WebKitGTK shell. The Linux shell opens from right-clicking the pet body or `-open-petdex`; `-petdex-only` starts just the daemon-backed picker for smoke tests. The local rendered browser smoke covers bridge-driven flows in headless Chrome; the macOS GUI smoke covers the real AppKit app; the Linux GUI smoke is skipped unless Linux, Xvfb, and WebKitGTK development packages are available.
 - PadX is represented by `PadXProvider` behind the catalog interface. Web searches for `PadX pet package format API PadX pets manifest`, `PadX provider pet catalog API`, `"PadX" "pets"`, `"PadX" "pet" "manifest"`, and `"PadX" "package" "manifest"` did not reveal a public pet catalog API or package format. To replace the stub, provide a PadX manifest URL, SDK/API docs, or local package format.
 
 Manual standalone daemon smoke test:

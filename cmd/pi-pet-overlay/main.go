@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"codex-pets/internal/catalog"
 	"codex-pets/internal/daemon"
+	"codex-pets/internal/linuxpetdex"
+	"codex-pets/internal/overlayhost"
 	"codex-pets/internal/petbrain"
 	"codex-pets/internal/piinstall"
 	"codex-pets/internal/protocol"
 	"codex-pets/internal/updater"
-	"codex-pets/internal/overlayhost"
 	"codex-pets/internal/waylandoverlay"
 	"codex-pets/internal/x11overlay"
 )
@@ -42,6 +45,9 @@ func main() {
 	piExtensionSource := flag.String("pi-extension-source", "", "Pi extension source file for -install-pi-extension")
 	piExtensionDir := flag.String("pi-extension-dir", "", "Pi extension install directory for -install-pi-extension or -uninstall-pi-extension")
 	buildScript := flag.String("build-script", "linux/build.sh", "host build script for update.apply, relative to the repo root (empty disables self-updates)")
+	openPetdex := flag.Bool("open-petdex", false, "Open the Petdex browser at startup")
+	petdexOnly := flag.Bool("petdex-only", false, "Open only the Petdex browser and exit when it closes")
+	petdexClientOnly := flag.Bool("petdex-client-only", false, "Open only the Petdex browser against an existing daemon socket")
 	flag.Parse()
 
 	if *installPiExtension && *uninstallPiExtension {
@@ -77,6 +83,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	repoRoot := detectRepoRoot()
+	petdexOptions := linuxpetdex.Options{
+		SocketPath: *socketPath,
+		StaticDir:  repoRoot,
+	}
+	if *petdexClientOnly {
+		err := linuxpetdex.Open(ctx, petdexOptions)
+		stop()
+		if err != nil && !isExpectedShutdown(err) {
+			fmt.Fprintf(os.Stderr, "pi-pet-overlay: petdex browser: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	listener, err := daemon.ListenUnix(*socketPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-pet-overlay: daemon listen: %v\n", err)
@@ -84,12 +105,15 @@ func main() {
 	}
 	defer os.Remove(*socketPath)
 
-	repoRoot := detectRepoRoot()
 	store := daemon.NewStoreWithStateFile(*stateFile)
 	server := daemon.NewServer(store)
+	server.PiExtensionSource = *piExtensionSource
 	server.PetSources = installedPetRoots(repoRoot, *petsDir)
 	if home, err := os.UserHomeDir(); err == nil {
 		server.PetImportRoot = filepath.Join(home, ".petdex", "pets")
+	}
+	if repoRoot != "" {
+		server.CatalogDir = filepath.Join(repoRoot, "prebundled-pets")
 	}
 	if snapshot := server.RefreshInstalledPets(); len(snapshot.InstalledPets) == 0 {
 		fmt.Fprintln(os.Stderr, "pi-pet-overlay: no pet packages found; the overlay will show a placeholder")
@@ -106,6 +130,20 @@ func main() {
 		daemonErr <- server.Serve(ctx, listener)
 	}()
 
+	if *petdexOnly {
+		err := linuxpetdex.Open(ctx, petdexOptions)
+		stop()
+		if err != nil && !isExpectedShutdown(err) {
+			fmt.Fprintf(os.Stderr, "pi-pet-overlay: petdex browser: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	openPetdexBrowser := petdexLauncher(ctx, *socketPath)
+	if *openPetdex {
+		openPetdexBrowser()
+	}
+
 	backend, backendLabel, err := pickBackend(*backendName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-pet-overlay: %v\n", err)
@@ -115,7 +153,9 @@ func main() {
 
 	overlayErr := make(chan error, 1)
 	go func() {
-		overlayErr <- overlayhost.Run(ctx, *socketPath, backend, *scale)
+		overlayErr <- overlayhost.RunWithOptions(ctx, *socketPath, backend, *scale, overlayhost.Options{
+			OnPetBrowserRequested: openPetdexBrowser,
+		})
 	}()
 
 	select {
@@ -169,6 +209,41 @@ func installedPetRoots(repoRoot string, extraDir string) []catalog.InstalledRoot
 		roots = append(roots, catalog.InstalledRoot{Dir: extraDir, Source: "app"})
 	}
 	return roots
+}
+
+func petdexLauncher(ctx context.Context, socketPath string) func() {
+	var mu sync.Mutex
+	var running bool
+
+	return func() {
+		mu.Lock()
+		if running {
+			mu.Unlock()
+			return
+		}
+		running = true
+		mu.Unlock()
+
+		go func() {
+			defer func() {
+				mu.Lock()
+				running = false
+				mu.Unlock()
+			}()
+
+			executable, err := os.Executable()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "pi-pet-overlay: petdex browser: %v\n", err)
+				return
+			}
+			cmd := exec.CommandContext(ctx, executable, "-petdex-client-only", "-socket", socketPath)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "pi-pet-overlay: petdex browser: %v\n", err)
+			}
+		}()
+	}
 }
 
 // pickBackend prefers native Wayland (first-class transparency and

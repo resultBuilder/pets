@@ -72,4 +72,7 @@ func TestPresentSelectsPetAndSafeApprovalBubble(t *testing.T) {
 	if got.Bubble != "Approval needed: git push origin main cat secret" {
 		t.Fatalf("bubble = %q", got.Bubble)
 	}
+	if got.PendingApprovalID != "a1" {
+		t.Fatalf("pending approval id = %q, want a1", got.PendingApprovalID)
+	}
 }
