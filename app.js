@@ -1,745 +1,821 @@
-const PETDEX_MANIFEST_V1 = "https://assets.petdex.dev/manifests/petdex-v1.json";
-const PETDEX_MANIFEST_V2 = "https://assets.petdex.dev/manifests/petdex-v2.json";
-const PETDEX_BASE = "https://assets.petdex.dev";
-const CUSTOM_DB = "codex-pets-app";
-const CUSTOM_STORE = "customPets";
-const PAGE_SIZE = 48;
+const PREBUNDLED_MANIFEST_URL = "prebundled-pets/manifest.json";
+const PREBUNDLED_SOURCE = "prebundled";
+const LOCAL_MANIFEST_FETCH_TIMEOUT_MS = 2000;
 
-const DEFAULT_STATES = [
+const PREBUNDLED_PETS = [
   {
-    id: "idle",
-    label: "Idle",
-    row: 0,
-    frames: 6,
-    durationMs: 1100,
-    aliases: ["idle"],
+    slug: "boba",
+    displayName: "Boba",
+    description: "Animated Codex-compatible pet bundled with the browser.",
+    kind: "creature",
+    submittedBy: "railly",
+    tags: ["prebundled"],
+    spritesheetUrl: "pets/boba/spritesheet.webp",
+    petJsonUrl: "pets/boba/pet.json",
+    frameWidth: 192,
+    frameHeight: 208,
   },
   {
-    id: "running-right",
-    label: "Run Right",
-    row: 1,
-    frames: 8,
-    durationMs: 1060,
-    aliases: ["running-right", "runRight", "right"],
+    slug: "cappy",
+    displayName: "Cappy",
+    description: "A cute coffee-loving capybara companion for calm focus sessions.",
+    kind: "creature",
+    submittedBy: "davidrichard1111",
+    tags: ["prebundled"],
+    spritesheetUrl: "pets/cappy/sprite.webp",
+    petJsonUrl: "pets/cappy/pet.json",
+    frameWidth: 192,
+    frameHeight: 208,
   },
   {
-    id: "running-left",
-    label: "Run Left",
-    row: 2,
-    frames: 8,
-    durationMs: 1060,
-    aliases: ["running-left", "runLeft", "left"],
+    slug: "pepe",
+    displayName: "Pepe",
+    description: "A compact Codex-style green frog pet in a plain blue shirt.",
+    kind: "creature",
+    submittedBy: "CodexPets",
+    tags: ["prebundled"],
+    spritesheetUrl: "pets/pepe/spritesheet.webp",
+    petJsonUrl: "pets/pepe/pet.json",
+    frameWidth: 192,
+    frameHeight: 208,
   },
   {
-    id: "waving",
-    label: "Wave",
-    row: 3,
-    frames: 4,
-    durationMs: 700,
-    aliases: ["waving", "wave"],
+    slug: "pc-guy",
+    displayName: "PC Guy",
+    description: "Animated Codex-compatible pet bundled with the browser.",
+    kind: "character",
+    submittedBy: "c",
+    tags: ["prebundled"],
+    spritesheetUrl: "pets/pc-guy/sprite.webp",
+    petJsonUrl: "pets/pc-guy/pet.json",
+    frameWidth: 192,
+    frameHeight: 208,
   },
   {
-    id: "jumping",
-    label: "Jump",
-    row: 4,
-    frames: 5,
-    durationMs: 840,
-    aliases: ["jumping", "jump"],
+    slug: "catfish",
+    displayName: "Catfish",
+    description: "A gray tabby cat-headed fish pet with a naturally fused fish body, rendered as a pixel-art Codex pet.",
+    kind: "creature",
+    submittedBy: "\u4e94\u5f00 \u4e94.",
+    tags: ["prebundled"],
+    spritesheetUrl: "pets/catfish/sprite.webp",
+    petJsonUrl: "pets/catfish/pet.json",
+    frameWidth: 192,
+    frameHeight: 208,
   },
   {
-    id: "failed",
-    label: "Failed",
-    row: 5,
-    frames: 8,
-    durationMs: 1220,
-    aliases: ["failed", "failure", "error"],
+    slug: "paperclip",
+    displayName: "Paperclip",
+    description: "A tiny friendly office paperclip assistant for calm document-editing days.",
+    kind: "object",
+    submittedBy: "Vlad T.",
+    tags: ["prebundled"],
+    spritesheetUrl: "pets/paperclip/spritesheet.webp",
+    petJsonUrl: "pets/paperclip/pet.json",
+    frameWidth: 192,
+    frameHeight: 208,
   },
   {
-    id: "waiting",
-    label: "Waiting",
-    row: 6,
-    frames: 6,
-    durationMs: 1010,
-    aliases: ["waiting", "wait", "extra1"],
-  },
-  {
-    id: "running",
-    label: "Running",
-    row: 7,
-    frames: 6,
-    durationMs: 820,
-    aliases: ["running", "run", "extra2"],
-  },
-  {
-    id: "review",
-    label: "Review",
-    row: 8,
-    frames: 6,
-    durationMs: 1030,
-    aliases: ["review", "thinking", "inspect"],
+    slug: "mallow",
+    displayName: "Mallow",
+    description: "A Codex digital pet based on the user cat: plush gray-and-white bicolor cat with gold eyes, pink nose, white bib and paws, gray mask, fluffy belly, and serious expression.",
+    kind: "creature",
+    submittedBy: "Aidil",
+    tags: ["prebundled"],
+    spritesheetUrl: "pets/mallow/spritesheet.webp",
+    petJsonUrl: "pets/mallow/pet.json",
+    frameWidth: 192,
+    frameHeight: 208,
   },
 ];
 
+const PERMISSION_PROFILES = {
+  boba: {
+    label: "Permissive",
+    shortLabel: "No prompts",
+    detail: "No Pi approval prompts",
+  },
+  "pc-guy": {
+    label: "Strict",
+    shortLabel: "Strict",
+    detail: "Asks before every shell command and file edit",
+  },
+  default: {
+    label: "Balanced",
+    shortLabel: "Balanced",
+    detail: "Asks before medium and high risk shell commands",
+  },
+};
+
+const IDLE_STATE = {
+  row: 0,
+  frames: 6,
+  durationMs: 1100,
+};
+
 const els = {
-  manifestForm: document.querySelector("#manifest-form"),
-  manifestUrl: document.querySelector("#manifest-url"),
-  search: document.querySelector("#pet-search"),
-  sourceButtons: [...document.querySelectorAll("[data-source]")],
-  folderInput: document.querySelector("#folder-input"),
-  filesInput: document.querySelector("#files-input"),
-  urlImportForm: document.querySelector("#url-import-form"),
-  petJsonUrl: document.querySelector("#pet-json-url"),
-  spriteUrl: document.querySelector("#sprite-url"),
-  importStatus: document.querySelector("#import-status"),
-  manifestTotal: document.querySelector("#manifest-total"),
-  visibleTotal: document.querySelector("#visible-total"),
-  customCount: document.querySelector("#custom-count"),
-  selectedSource: document.querySelector("#selected-source"),
-  selectedKind: document.querySelector("#selected-kind"),
-  selectedName: document.querySelector("#selected-name"),
-  selectedDescription: document.querySelector("#selected-description"),
-  selectedTags: document.querySelector("#selected-tags"),
-  selectedSprite: document.querySelector("#selected-sprite"),
-  stateTabs: document.querySelector("#state-tabs"),
-  installCommand: document.querySelector("#install-command"),
-  copyCommand: document.querySelector("#copy-command"),
-  openPetdex: document.querySelector("#open-petdex"),
-  galleryStatus: document.querySelector("#gallery-status"),
-  grid: document.querySelector("#pet-grid"),
-  loadMore: document.querySelector("#load-more"),
-  shuffle: document.querySelector("#shuffle-pet"),
-  refresh: document.querySelector("#refresh-manifest"),
-  cardTemplate: document.querySelector("#pet-card-template"),
+  search: document.querySelector("#search"),
+  status: document.querySelector("#status"),
+  list: document.querySelector("#pet-list"),
+  spritePreview: document.querySelector("#sprite-preview"),
+  sourceLabel: document.querySelector("#source-label"),
+  petName: document.querySelector("#pet-name"),
+  petDescription: document.querySelector("#pet-description"),
+  permissionProfile: document.querySelector("#pet-permission-profile"),
+  piExtensionStatus: document.querySelector("#pi-extension-status"),
+  primaryAction: document.querySelector("#primary-action"),
+  installPiAction: document.querySelector("#install-pi-action"),
+  uninstallPiAction: document.querySelector("#uninstall-pi-action"),
+  rowTemplate: document.querySelector("#pet-row-template"),
 };
 
 const state = {
-  manifestUrl: PETDEX_MANIFEST_V1,
-  petdexPets: [],
-  customPets: [],
+  catalog: [],
+  installed: [],
   selected: null,
-  selectedStateId: "idle",
-  filterSource: "all",
+  activePetSlug: "",
   query: "",
-  visibleLimit: PAGE_SIZE,
-  detailsCache: new Map(),
-  activeObjectUrls: new Set(),
+  nativeReady: false,
+  busy: false,
+  piInstallBusy: false,
+  piUninstallBusy: false,
+  piExtension: {
+    available: false,
+    installed: false,
+    needsUpdate: false,
+    path: "",
+    sourceVersion: "",
+    installedVersion: "",
+  },
+  lastMessage: "",
 };
 
-init();
+let previewKey = "";
+let resizeFrame = 0;
 
-async function init() {
+window.__codexPetsAppBoot = {
+  started: true,
+  loaded: false,
+  error: "",
+};
+
+try {
+  init();
+  window.__codexPetsAppBoot.loaded = true;
+} catch (error) {
+  window.__codexPetsAppBoot.error = error?.stack || error?.message || String(error);
+  throw error;
+}
+
+function init() {
   bindEvents();
-  await loadCustomPets();
-  await loadManifest(state.manifestUrl);
+  installPrebundledCatalog();
+  if (nativeBridgeAvailable()) {
+    handleNativeReady();
+  }
+  loadBundledCatalog();
 }
 
 function bindEvents() {
-  els.manifestForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const url = els.manifestUrl.value.trim();
-    if (!url) return;
-    await loadManifest(url);
-  });
-
-  els.refresh.addEventListener("click", () => loadManifest(state.manifestUrl));
-
   els.search.addEventListener("input", () => {
     state.query = els.search.value.trim().toLowerCase();
-    state.visibleLimit = PAGE_SIZE;
-    renderGallery();
+    state.lastMessage = "";
+    renderList();
   });
 
-  for (const button of els.sourceButtons) {
-    button.addEventListener("click", () => {
-      state.filterSource = button.dataset.source;
-      state.visibleLimit = PAGE_SIZE;
-      for (const item of els.sourceButtons) {
-        item.classList.toggle("is-active", item === button);
-      }
-      renderGallery();
-    });
-  }
-
-  els.loadMore.addEventListener("click", () => {
-    state.visibleLimit += PAGE_SIZE;
-    renderGallery();
-  });
-
-  els.shuffle.addEventListener("click", () => {
-    const pets = filteredPets();
-    if (pets.length === 0) return;
-    const next = pets[Math.floor(Math.random() * pets.length)];
-    selectPet(next);
-  });
-
-  els.copyCommand.addEventListener("click", async () => {
-    const value = els.installCommand.textContent.trim();
-    try {
-      await navigator.clipboard.writeText(value);
-      flashButton(els.copyCommand, "Copied");
-    } catch {
-      flashButton(els.copyCommand, "Copy failed");
+  els.search.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectAdjacentPet(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      selectAdjacentPet(-1);
+    } else if (event.key === "Enter" && state.selected) {
+      event.preventDefault();
+      useSelectedPet();
     }
   });
 
-  els.folderInput.addEventListener("change", async () => {
-    await importFromFiles([...els.folderInput.files]);
-    els.folderInput.value = "";
-  });
+  els.primaryAction.addEventListener("click", useSelectedPet);
+  els.installPiAction.addEventListener("click", installPiExtension);
+  els.uninstallPiAction.addEventListener("click", uninstallPiExtension);
 
-  els.filesInput.addEventListener("change", async () => {
-    await importFromFiles([...els.filesInput.files]);
-    els.filesInput.value = "";
+  window.addEventListener("codex-pets-native-ready", handleNativeReady);
+  window.addEventListener("codex-pets-native-browser-pets", (event) => {
+    const pets = Array.isArray(event.detail?.pets) ? event.detail.pets : [];
+    const rows = pets.map(normalizePet).filter(Boolean);
+    if (rows.length === 0) return;
+    const selectedSlug = state.selected?.slug || "";
+    const selectedWasCatalog = isCatalogPet(state.selected);
+    state.installed = rows.filter((pet) => pet.source === "installed");
+    state.catalog = rows.filter((pet) => pet.source !== "installed");
+    state.nativeCatalog = true;
+    if (selectedSlug && selectedWasCatalog) {
+      const installedMatch = state.installed.find((pet) => pet.slug === selectedSlug);
+      if (installedMatch) state.selected = installedMatch;
+    }
+    chooseInitialPet();
+    render();
   });
-
-  els.urlImportForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    await importFromUrls(els.petJsonUrl.value.trim(), els.spriteUrl.value.trim());
+  window.addEventListener("codex-pets-native-installed-pets", (event) => {
+    const pets = Array.isArray(event.detail?.pets) ? event.detail.pets : [];
+    const selectedSlug = state.selected?.slug || "";
+    const selectedWasCatalog = isCatalogPet(state.selected);
+    state.installed = pets.map(normalizePet).filter(Boolean);
+    if (selectedSlug && selectedWasCatalog) {
+      const installedMatch = state.installed.find((pet) => pet.slug === selectedSlug);
+      if (installedMatch) state.selected = installedMatch;
+    }
+    chooseInitialPet();
+    render();
+  });
+  window.addEventListener("codex-pets-native-import-result", (event) => {
+    const detail = event.detail || {};
+    state.busy = false;
+    state.lastMessage = detail.message || (detail.ok ? "Done" : "Could not update pet");
+    if (detail.ok && state.selected) {
+      state.activePetSlug = state.selected.slug;
+    }
+    requestBrowserPets();
+    render();
+  });
+  window.addEventListener("codex-pets-native-pi-install-result", (event) => {
+    const detail = event.detail || {};
+    state.piInstallBusy = false;
+    state.lastMessage = detail.message || (detail.ok ? "Installed Pi extension" : "Could not install Pi extension");
+    updatePiExtensionState(detail);
+    requestPiExtensionStatus();
+    render();
+  });
+  window.addEventListener("codex-pets-native-pi-uninstall-result", (event) => {
+    const detail = event.detail || {};
+    state.piUninstallBusy = false;
+    state.lastMessage = detail.message || (detail.ok ? "Uninstalled Pi extension" : "Could not uninstall Pi extension");
+    updatePiExtensionState(detail);
+    requestPiExtensionStatus();
+    render();
+  });
+  window.addEventListener("codex-pets-native-pi-install-status", (event) => {
+    updatePiExtensionState(event.detail || {});
+    render();
   });
 }
 
-async function loadManifest(url) {
-  setGalleryStatus("Loading Petdex...");
-  state.manifestUrl = url;
-  els.manifestUrl.value = url;
-
+async function loadBundledCatalog() {
+  setStatus("Loading bundled pets...");
   try {
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Manifest returned ${response.status}`);
-    const raw = await response.json();
-    state.petdexPets = normalizeManifest(raw);
-    els.manifestTotal.textContent = formatCount(state.petdexPets.length);
-    setGalleryStatus(`Loaded ${formatCount(state.petdexPets.length)} Petdex pets`);
+    const manifest = await fetchJSON(PREBUNDLED_MANIFEST_URL, LOCAL_MANIFEST_FETCH_TIMEOUT_MS);
+    const pets = normalizeManifest(manifest, new URL(PREBUNDLED_MANIFEST_URL, document.baseURI));
+    if (pets.length === 0) throw new Error("Manifest is empty");
+    // In the native shell the daemon serves the merged catalog; the local
+    // manifest is only the web fallback.
+    if (state.nativeCatalog) return;
+    state.catalog = pets;
+    state.lastMessage = "";
+  } catch {
+    state.lastMessage =
+      state.catalog.length > 0 ? "Using bundled pets" : "Bundled pets could not be loaded";
+  }
+  chooseInitialPet();
+  render();
+}
 
-    if (!state.selected) {
-      const preferred =
-        state.petdexPets.find((pet) => pet.slug === "boba") ?? state.petdexPets[0];
-      if (preferred) selectPet(preferred);
-    }
-    renderGallery();
-  } catch (error) {
-    setGalleryStatus(error.message || "Could not load manifest");
-    if (url !== PETDEX_MANIFEST_V2) {
-      els.manifestUrl.value = PETDEX_MANIFEST_V2;
-    }
-    renderGallery();
+function installPrebundledCatalog() {
+  const pets = normalizeManifest(
+    { pets: PREBUNDLED_PETS },
+    new URL(PREBUNDLED_MANIFEST_URL, document.baseURI),
+  );
+  state.catalog = pets;
+  state.lastMessage = "";
+  chooseInitialPet();
+  render();
+}
+
+async function fetchJSON(url, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-function normalizeManifest(raw) {
+function normalizeManifest(raw, manifestURL = new URL(document.baseURI)) {
   if (raw?.v === 2 && Array.isArray(raw.pets)) {
-    const base = trimSlash(raw.assetBase || PETDEX_BASE);
+    const base = trimSlash(raw.assetBase || new URL(".", manifestURL).href);
     return raw.pets
       .map((item) => {
         if (!Array.isArray(item)) return null;
-        const [
-          slug,
-          displayName,
-          kind,
-          submittedBy,
-          spritesheet,
-          petJson,
-          zip,
-        ] = item;
-        if (!slug || !displayName || !spritesheet) return null;
+        const [slug, displayName, kind, submittedBy, spritesheet, petJson, zip] = item;
         return normalizePet({
+          source: PREBUNDLED_SOURCE,
           slug,
           displayName,
           kind,
           submittedBy,
           spritesheetUrl: absolutizeAsset(spritesheet, base),
           petJsonUrl: petJson ? absolutizeAsset(petJson, base) : "",
-          zipUrl: zip ? absolutizeAsset(zip, base) : null,
+          zipUrl: zip ? absolutizeAsset(zip, base) : "",
         });
       })
       .filter(Boolean);
   }
 
   if (Array.isArray(raw?.pets)) {
-    return raw.pets.map(normalizePet).filter(Boolean);
+    return raw.pets
+      .map((pet) => normalizePet({ ...pet, source: PREBUNDLED_SOURCE }))
+      .map((pet) => resolveManifestPetAssets(pet, manifestURL))
+      .filter(Boolean);
   }
 
-  throw new Error("Manifest shape is not supported");
+  throw new Error("Unsupported manifest shape");
+}
+
+function resolveManifestPetAssets(pet, manifestURL) {
+  if (!pet) return null;
+  return {
+    ...pet,
+    spritesheetUrl: absolutizeManifestAsset(pet.spritesheetUrl, manifestURL),
+    petJsonUrl: absolutizeManifestAsset(pet.petJsonUrl, manifestURL),
+    zipUrl: absolutizeManifestAsset(pet.zipUrl, manifestURL),
+  };
 }
 
 function normalizePet(input) {
+  if (!input || typeof input !== "object") return null;
   const slug = cleanString(input.slug || input.id);
   const displayName = cleanString(input.displayName || input.name || slug);
   const spritesheetUrl = cleanString(
-    input.spritesheetUrl || input.spritesheetPath || input.spriteUrl,
+    input.spritesheetUrl ||
+      input.spritesheetURL ||
+      input.spritesheetPath ||
+      input.spritesheet ||
+      input.spriteUrl ||
+      input.spriteURL,
   );
+
   if (!slug || !displayName || !spritesheetUrl) return null;
 
   return {
-    source: input.source || "petdex",
+    source: cleanString(input.source) || PREBUNDLED_SOURCE,
+    nativePetId: cleanString(input.nativePetId),
     slug,
     displayName,
-    description: cleanString(input.description) || "Animated Codex pet.",
+    description: cleanString(input.description) || "Animated Codex-compatible pet.",
     kind: cleanString(input.kind) || "pet",
-    submittedBy: cleanString(input.submittedBy || input.author) || "",
+    submittedBy: cleanString(input.submittedBy || input.author),
     tags: listStrings(input.tags || input.vibes),
     spritesheetUrl,
-    petJsonUrl: cleanString(input.petJsonUrl),
-    zipUrl: cleanString(input.zipUrl),
-    petJson: input.petJson || null,
+    petJsonUrl: cleanString(input.petJsonUrl || input.petJSONUrl || input.petJsonURL),
+    zipUrl: cleanString(input.zipUrl || input.zipURL),
     frameWidth: positiveNumber(input.frameWidth) || 192,
     frameHeight: positiveNumber(input.frameHeight) || 208,
-    states: normalizeStates(input.petJson || input),
-    addedAt: input.addedAt || Date.now(),
+    canUninstall: Boolean(input.canUninstall),
   };
 }
 
-async function loadPetDetails(pet) {
-  if (pet.source === "custom" || !pet.petJsonUrl) return pet;
-  if (state.detailsCache.has(pet.slug)) {
-    return { ...pet, ...state.detailsCache.get(pet.slug) };
-  }
-
-  try {
-    const response = await fetch(pet.petJsonUrl);
-    if (!response.ok) throw new Error(`pet.json ${response.status}`);
-    const petJson = await response.json();
-    const details = normalizeDetails(petJson);
-    state.detailsCache.set(pet.slug, details);
-    return { ...pet, ...details };
-  } catch {
-    return pet;
-  }
+function chooseInitialPet() {
+  if (state.selected && allPets().some((pet) => samePet(pet, state.selected))) return;
+  state.selected =
+    state.installed[0] ||
+    state.catalog.find((pet) => pet.slug === "boba") ||
+    state.catalog[0] ||
+    null;
 }
 
-function normalizeDetails(petJson) {
-  return {
-    petJson,
-    displayName: cleanString(petJson.displayName || petJson.name),
-    description: cleanString(petJson.description),
-    kind: cleanString(petJson.kind),
-    tags: listStrings(petJson.tags || petJson.vibes),
-    frameWidth: positiveNumber(petJson.frameWidth) || 192,
-    frameHeight: positiveNumber(petJson.frameHeight) || 208,
-    states: normalizeStates(petJson),
-  };
-}
-
-async function selectPet(pet) {
-  const detailed = await loadPetDetails(pet);
-  state.selected = { ...pet, ...dropEmptyDetails(detailed) };
-  state.selectedStateId = state.selectedStateId || "idle";
+function render() {
+  renderList();
   renderSelected();
-  renderGallery();
 }
 
-function dropEmptyDetails(pet) {
-  const next = { ...pet };
-  if (!next.displayName) delete next.displayName;
-  if (!next.description) delete next.description;
-  if (!next.kind) delete next.kind;
-  return next;
+function setSelectedPet(pet) {
+  state.selected = pet;
+  state.lastMessage = "";
+  updateListSelection();
+  renderStatus();
+  renderSelected();
+}
+
+function renderList() {
+  const pets = filteredPets();
+  const fragment = document.createDocumentFragment();
+
+  for (const pet of pets) {
+    const row = els.rowTemplate.content.firstElementChild.cloneNode(true);
+    row.dataset.slug = pet.slug;
+    row.dataset.source = pet.source;
+    row.dataset.key = rowKey(pet);
+    row.setAttribute("aria-selected", samePet(pet, state.selected) ? "true" : "false");
+    row.classList.toggle("is-selected", samePet(pet, state.selected));
+    row.classList.toggle("is-active", pet.slug === state.activePetSlug);
+    row.querySelector(".pet-row-name").textContent = pet.displayName;
+    row.querySelector(".pet-row-meta").textContent = rowMeta(pet);
+    row.addEventListener("click", () => {
+      setSelectedPet(pet);
+    });
+    fragment.append(row);
+  }
+
+  els.list.replaceChildren(fragment);
+  renderStatus();
+}
+
+// Selection changes only toggle row classes instead of rebuilding the list,
+// which keeps scroll position and avoids DOM churn.
+function updateListSelection() {
+  const selectedKey = state.selected ? rowKey(state.selected) : "";
+  for (const row of els.list.querySelectorAll(".pet-row")) {
+    const selected = row.dataset.key === selectedKey;
+    row.classList.toggle("is-selected", selected);
+    row.classList.toggle("is-active", row.dataset.slug === state.activePetSlug);
+    row.setAttribute("aria-selected", selected ? "true" : "false");
+  }
+}
+
+function rowKey(pet) {
+  return `${pet.source}|${pet.slug}|${pet.nativePetId || ""}`;
+}
+
+function renderStatus() {
+  if (state.lastMessage) {
+    setStatus(state.lastMessage);
+    return;
+  }
+  const pets = filteredPets();
+  if (pets.length === 0) {
+    setStatus("No matching pets");
+    return;
+  }
+  const installedCount = state.installed.length;
+  const total = allPets().length;
+  const suffix = installedCount > 0 ? `, ${installedCount} installed` : "";
+  setStatus(`${formatCount(pets.length)} of ${formatCount(total)} pets${suffix}`);
 }
 
 function renderSelected() {
   const pet = state.selected;
-  if (!pet) return;
-  const selectedState =
-    pet.states.find((item) => item.id === state.selectedStateId) ?? pet.states[0];
-
-  els.selectedSource.textContent = pet.source === "custom" ? "Custom" : "Petdex";
-  els.selectedKind.textContent = pet.kind;
-  els.selectedName.textContent = pet.displayName;
-  els.selectedDescription.textContent = pet.description || "Animated Codex pet.";
-  els.installCommand.textContent =
-    pet.source === "custom"
-      ? `custom pet: ${pet.slug}`
-      : `npx petdex install ${pet.slug}`;
-  els.openPetdex.href =
-    pet.source === "custom"
-      ? "https://github.com/crafter-station/petdex"
-      : `https://petdex.dev/pets/${encodeURIComponent(pet.slug)}`;
-  els.openPetdex.textContent = pet.source === "custom" ? "Format" : "Petdex";
-
-  els.selectedTags.replaceChildren(
-    ...pet.tags.slice(0, 8).map((tag) => {
-      const span = document.createElement("span");
-      span.textContent = tag;
-      return span;
-    }),
-  );
-
-  els.selectedSprite.replaceChildren(
-    createSpriteElement(pet, selectedState, { scale: responsiveSpriteScale(), animated: true }),
-  );
-
-  els.stateTabs.replaceChildren(
-    ...pet.states.map((item) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `state-tab ${item.id === selectedState.id ? "is-active" : ""}`;
-      button.textContent = item.label;
-      button.addEventListener("click", () => {
-        state.selectedStateId = item.id;
-        renderSelected();
-      });
-      return button;
-    }),
-  );
-}
-
-function responsiveSpriteScale() {
-  const width = window.innerWidth;
-  if (width < 420) return 0.95;
-  if (width < 760) return 1.08;
-  if (width < 1280) return 1.25;
-  return 1.55;
-}
-
-function renderGallery() {
-  const pets = filteredPets();
-  const visible = pets.slice(0, state.visibleLimit);
-  els.visibleTotal.textContent = formatCount(visible.length);
-  els.customCount.textContent = String(state.customPets.length);
-
-  els.grid.replaceChildren(...visible.map(createPetCard));
-  els.loadMore.hidden = visible.length >= pets.length;
-
-  if (pets.length === 0) {
-    setGalleryStatus("No pets match");
-  } else {
-    setGalleryStatus(`${formatCount(pets.length)} match${pets.length === 1 ? "" : "es"}`);
+  if (!pet) {
+    els.sourceLabel.textContent = "Petdex";
+    els.petName.textContent = "No Pet Selected";
+    els.petDescription.textContent = "Choose a pet to preview it.";
+    els.permissionProfile.textContent = "";
+    if (previewKey !== "empty") {
+      previewKey = "empty";
+      els.spritePreview.replaceChildren(emptyPreview());
+    }
+    updateAction();
+    return;
   }
+
+  els.sourceLabel.textContent = sourceLabel(pet);
+  els.petName.textContent = pet.displayName;
+  els.petDescription.textContent = pet.description;
+  els.permissionProfile.textContent = permissionProfileText(pet);
+  // Rebuild the sprite only when it actually changed: unrelated re-renders
+  // (status events, busy flags) must not re-decode the sheet or restart the
+  // idle animation.
+  const key = previewIdentity(pet);
+  if (previewKey !== key) {
+    previewKey = key;
+    els.spritePreview.replaceChildren(createSpriteElement(pet));
+  }
+  updateAction();
+}
+
+function previewIdentity(pet) {
+  return [pet.source, pet.slug, pet.nativePetId || "", pet.spritesheetUrl, pet.frameWidth, pet.frameHeight].join("|");
+}
+
+function updateAction() {
+  const pet = state.selected;
+  const isActive = pet && state.activePetSlug && pet.slug === state.activePetSlug;
+  const canUse =
+    state.nativeReady &&
+    !state.busy &&
+    !isActive &&
+    (isCatalogPet(pet) || (pet?.source === "installed" && pet.nativePetId));
+  els.primaryAction.disabled = !canUse;
+  els.primaryAction.textContent = isActive ? "Active" : "Use";
+
+  updatePiExtensionStatus();
+
+  const showPiAction =
+    state.nativeReady &&
+    state.piExtension.available &&
+    (!state.piExtension.installed || state.piExtension.needsUpdate || state.piInstallBusy);
+  els.installPiAction.hidden = !showPiAction;
+  els.installPiAction.disabled = !showPiAction || state.busy || state.piInstallBusy || state.piUninstallBusy;
+  els.installPiAction.textContent = state.piInstallBusy
+    ? "Installing..."
+    : state.piExtension.installed && state.piExtension.needsUpdate
+      ? "Update Pi"
+      : "Install to Pi";
+
+  const showUninstallPiAction =
+    state.nativeReady &&
+    state.piExtension.installed;
+  els.uninstallPiAction.hidden = !showUninstallPiAction;
+  els.uninstallPiAction.disabled =
+    !showUninstallPiAction || state.busy || state.piInstallBusy || state.piUninstallBusy;
+  els.uninstallPiAction.textContent = state.piUninstallBusy ? "Uninstalling..." : "Uninstall Pi";
+}
+
+function updatePiExtensionStatus() {
+  const status = (() => {
+    if (!state.nativeReady) return "Pi extension status unavailable";
+    if (state.piInstallBusy) return "Pi extension installing...";
+    if (state.piUninstallBusy) return "Pi extension uninstalling...";
+    if (state.piExtension.installed && !state.piExtension.available) {
+      return "Pi extension installed - source unavailable";
+    }
+    if (!state.piExtension.available) return "Pi extension source unavailable";
+    if (state.piExtension.installed && state.piExtension.needsUpdate) {
+      const version = state.piExtension.sourceVersion ? ` to ${state.piExtension.sourceVersion}` : "";
+      return `Pi extension installed - update available${version}`;
+    }
+    if (state.piExtension.installed) {
+      return state.piExtension.installedVersion
+        ? `Pi extension installed (${state.piExtension.installedVersion})`
+        : "Pi extension installed";
+    }
+    return "Pi extension not installed";
+  })();
+
+  els.piExtensionStatus.textContent = status;
+  els.piExtensionStatus.title = [
+    state.piExtension.path,
+    state.piExtension.installedVersion ? `Installed: ${state.piExtension.installedVersion}` : "",
+    state.piExtension.sourceVersion ? `Bundled: ${state.piExtension.sourceVersion}` : "",
+  ].filter(Boolean).join("\n") || status;
+}
+
+function useSelectedPet() {
+  if (!state.selected || state.busy) return;
+  if (state.selected.slug === state.activePetSlug) return;
+
+  if (state.selected.source === "installed") {
+    if (!state.selected.nativePetId) return;
+    state.busy = true;
+    state.lastMessage = `Selecting ${state.selected.displayName}...`;
+    postNativeMessage({
+      action: "selectInstalledPet",
+      petId: state.selected.nativePetId,
+    });
+    render();
+    return;
+  }
+
+  if (!isCatalogPet(state.selected)) return;
+
+  // If this catalog pet is already installed, select it instead of importing a duplicate.
+  const alreadyInstalled = state.installed.find((p) => p.slug === state.selected.slug);
+  if (alreadyInstalled && alreadyInstalled.nativePetId) {
+    state.busy = true;
+    state.lastMessage = `Selecting ${state.selected.displayName}...`;
+    postNativeMessage({
+      action: "selectInstalledPet",
+      petId: alreadyInstalled.nativePetId,
+    });
+    render();
+    return;
+  }
+
+  if (!state.selected.nativePetId) return;
+  state.busy = true;
+  state.lastMessage = `Selecting ${state.selected.displayName}...`;
+  postNativeMessage({
+    action: "importPet",
+    petId: state.selected.nativePetId,
+  });
+  render();
+}
+
+function installPiExtension() {
+  const canInstall =
+    state.nativeReady &&
+    state.piExtension.available &&
+    (!state.piExtension.installed || state.piExtension.needsUpdate);
+  if (!canInstall || state.busy || state.piInstallBusy || state.piUninstallBusy) return;
+  state.piInstallBusy = true;
+  state.lastMessage = "Installing Pi extension...";
+  postNativeMessage({ action: "installPiExtension" });
+  render();
+}
+
+function uninstallPiExtension() {
+  const canUninstall =
+    state.nativeReady &&
+    state.piExtension.installed;
+  if (!canUninstall || state.busy || state.piInstallBusy || state.piUninstallBusy) return;
+  state.piUninstallBusy = true;
+  state.lastMessage = "Uninstalling Pi extension...";
+  postNativeMessage({ action: "uninstallPiExtension" });
+  render();
+}
+
+function handleNativeReady() {
+  state.nativeReady = true;
+  document.documentElement.classList.add("native-shell");
+  requestBrowserPets();
+  requestPiExtensionStatus();
+  render();
+}
+
+function requestBrowserPets() {
+  if (!nativeBridgeAvailable()) return;
+  postNativeMessage({ action: "listBrowserPets" });
+}
+
+function requestPiExtensionStatus() {
+  if (!nativeBridgeAvailable()) return;
+  postNativeMessage({ action: "getPiExtensionStatus" });
+}
+
+function updatePiExtensionState(detail) {
+  if (!detail || typeof detail !== "object") return;
+  state.piExtension = {
+    available: Boolean(detail.available),
+    installed: Boolean(detail.installed),
+    needsUpdate: Boolean(detail.needsUpdate),
+    path: cleanString(detail.path),
+    sourceVersion: cleanString(detail.sourceVersion),
+    installedVersion: cleanString(detail.installedVersion),
+  };
+}
+
+function postNativeMessage(payload) {
+  if (window.CodexPetsNative?.postMessage) {
+    window.CodexPetsNative.postMessage(payload);
+    return true;
+  }
+  if (window.webkit?.messageHandlers?.codexPets?.postMessage) {
+    window.webkit.messageHandlers.codexPets.postMessage(payload);
+    return true;
+  }
+  return false;
+}
+
+function nativeBridgeAvailable() {
+  return Boolean(
+    window.CodexPetsNative?.postMessage ||
+      window.webkit?.messageHandlers?.codexPets?.postMessage,
+  );
+}
+
+function createSpriteElement(pet) {
+  const frameWidth = pet.frameWidth || 192;
+  const frameHeight = pet.frameHeight || 208;
+  const scale = spriteScale(frameWidth, frameHeight);
+
+  const frame = document.createElement("span");
+  frame.className = "pet-sprite-frame";
+  frame.setAttribute("role", "img");
+  frame.setAttribute("aria-label", pet.displayName);
+  frame.style.setProperty("--frame-w", `${frameWidth}px`);
+  frame.style.setProperty("--frame-h", `${frameHeight}px`);
+  frame.style.setProperty("--sheet-w", `${frameWidth * 8}px`);
+  frame.style.setProperty("--sheet-h", `${frameHeight * 9}px`);
+  frame.style.setProperty("--scale", String(scale));
+
+  const sprite = document.createElement("span");
+  sprite.className = "pet-sprite";
+  sprite.style.setProperty("--sprite-url", `url("${cssEscapeUrl(pet.spritesheetUrl)}")`);
+  sprite.style.setProperty("--sprite-frames", String(IDLE_STATE.frames));
+  sprite.style.setProperty("--sprite-duration", `${IDLE_STATE.durationMs}ms`);
+  sprite.style.setProperty("--sprite-end-x", `-${IDLE_STATE.frames * frameWidth}px`);
+  frame.append(sprite);
+  return frame;
+}
+
+function emptyPreview() {
+  const element = document.createElement("span");
+  element.className = "empty-preview";
+  element.textContent = "No preview";
+  return element;
+}
+
+function spriteScale(frameWidth, frameHeight) {
+  const bounds = els.spritePreview.getBoundingClientRect();
+  const availableWidth = Math.max(80, bounds.width - 12);
+  const availableHeight = Math.max(80, bounds.height - 12);
+  const fit = Math.min(availableWidth / frameWidth, availableHeight / frameHeight, 1.85);
+  return Math.max(0.35, fit);
+}
+
+function selectAdjacentPet(direction) {
+  const pets = filteredPets();
+  if (pets.length === 0) return;
+  const index = Math.max(0, pets.findIndex((pet) => samePet(pet, state.selected)));
+  const nextIndex = Math.min(pets.length - 1, Math.max(0, index + direction));
+  setSelectedPet(pets[nextIndex]);
+  els.list
+    .querySelector(`[data-source="${state.selected.source}"][data-slug="${cssSelectorEscape(state.selected.slug)}"]`)
+    ?.scrollIntoView({ block: "nearest" });
 }
 
 function filteredPets() {
-  const combined = [...state.customPets, ...state.petdexPets];
-  return combined.filter((pet) => {
-    if (state.filterSource !== "all" && pet.source !== state.filterSource) {
-      return false;
-    }
-    if (!state.query) return true;
+  const query = state.query;
+  if (!query) return allPets();
+
+  return allPets().filter((pet) => {
     const haystack = [
       pet.displayName,
       pet.slug,
       pet.kind,
       pet.submittedBy,
       pet.description,
+      permissionProfile(pet).label,
+      permissionProfile(pet).detail,
       ...pet.tags,
+      pet.source,
     ]
       .join(" ")
       .toLowerCase();
-    return haystack.includes(state.query);
+    return haystack.includes(query);
   });
 }
 
-function createPetCard(pet) {
-  const fragment = els.cardTemplate.content.cloneNode(true);
-  const card = fragment.querySelector(".pet-card");
-  const button = fragment.querySelector(".pet-card-button");
-  const spriteSlot = fragment.querySelector(".pet-card-sprite");
-  const name = fragment.querySelector("strong");
-  const meta = fragment.querySelector("small");
-  const cardState = pet.states[hashString(pet.slug) % pet.states.length];
+function allPets() {
+  // Installed rows arrive already deduplicated by the daemon; the page only
+  // hides catalog rows that duplicate an installed pet.
+  const installed = state.installed;
+  const installedSlugs = new Set(installed.map((p) => p.slug));
+  const installedNames = new Set(installed.map((p) => normalizedPetName(p)));
+  const uniqueCatalog = state.catalog.filter(
+    (p) => !installedSlugs.has(p.slug) && !installedNames.has(normalizedPetName(p)),
+  );
+  return [...installed, ...uniqueCatalog];
+}
 
-  name.textContent = pet.displayName;
-  meta.textContent = pet.source === "custom" ? pet.slug : pet.submittedBy || pet.kind;
-  spriteSlot.append(createSpriteElement(pet, cardState, { scale: 0.44, animated: false }));
-  button.classList.toggle("is-selected", state.selected?.slug === pet.slug);
-  button.addEventListener("click", () => selectPet(pet));
+function normalizedPetName(pet) {
+  return cleanString(pet?.displayName || pet?.slug).toLowerCase();
+}
 
-  if (pet.source === "custom") {
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "pet-remove";
-    remove.title = "Remove custom pet";
-    remove.textContent = "x";
-    remove.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      await deleteCustomPet(pet.slug);
-    });
-    card.append(remove);
+function isCatalogPet(pet) {
+  return pet?.source === PREBUNDLED_SOURCE;
+}
+
+function samePet(left, right) {
+  if (!left || !right) return false;
+  if (left.source === "installed" || right.source === "installed") {
+    return left.nativePetId && right.nativePetId
+      ? left.nativePetId === right.nativePetId
+      : left.source === right.source && left.slug === right.slug;
   }
-
-  return fragment;
+  return left.source === right.source && left.slug === right.slug;
 }
 
-function createSpriteElement(pet, stateDef, options) {
-  const frameWidth = pet.frameWidth || 192;
-  const frameHeight = pet.frameHeight || 208;
-  const frame = document.createElement("span");
-  frame.className = "pet-sprite-frame";
-  frame.setAttribute("role", "img");
-  frame.setAttribute("aria-label", `${pet.displayName} ${stateDef.label}`);
-  frame.style.setProperty("--frame-w", `${frameWidth}px`);
-  frame.style.setProperty("--frame-h", `${frameHeight}px`);
-  frame.style.setProperty("--sheet-w", `${frameWidth * 8}px`);
-  frame.style.setProperty("--sheet-h", `${frameHeight * 9}px`);
-  frame.style.setProperty("--scale", String(options.scale));
-
-  const sprite = document.createElement("span");
-  sprite.className = options.animated ? "pet-sprite" : "pet-sprite-static";
-  sprite.style.setProperty("--sprite-url", `url("${cssEscapeUrl(pet.spritesheetUrl)}")`);
-  sprite.style.setProperty("--sprite-y", `-${stateDef.row * frameHeight}px`);
-  sprite.style.setProperty("--sprite-end-x", `-${stateDef.frames * frameWidth}px`);
-  sprite.style.setProperty("--sprite-frames", String(stateDef.frames));
-  sprite.style.setProperty("--sprite-duration", `${stateDef.durationMs}ms`);
-  frame.append(sprite);
-  return frame;
+function rowMeta(pet) {
+  const detail = displayAttribution(pet) || (pet.source === "installed" ? "" : pet.kind);
+  const profile = permissionProfile(pet).shortLabel;
+  return [profile, detail].filter(Boolean).join(" - ");
 }
 
-async function importFromFiles(files) {
-  if (!files.length) return;
-  setImportStatus("Reading package...");
-
-  const petJsonFile = findFile(files, (file) => basename(file).toLowerCase() === "pet.json");
-  const spriteFile = findFile(files, (file) => {
-    const name = basename(file).toLowerCase();
-    return (
-      name === "spritesheet.webp" ||
-      name === "spritesheet.png" ||
-      name === "sprite.webp" ||
-      name === "sprite.png"
-    );
-  });
-
-  if (!petJsonFile || !spriteFile) {
-    setImportStatus("Need pet.json and spritesheet.webp/png");
-    return;
-  }
-
-  let previewUrl = "";
-  try {
-    const petJson = JSON.parse(await petJsonFile.text());
-    const slugSeed =
-      cleanString(petJson.id || petJson.slug) ||
-      stripExtension(basename(petJsonFile.webkitRelativePath || petJsonFile.name));
-    const dimensions = await measureImageFile(spriteFile);
-    previewUrl = URL.createObjectURL(spriteFile);
-    const pet = normalizePet({
-      source: "custom",
-      slug: slugify(slugSeed || petJson.displayName || "custom-pet"),
-      displayName: petJson.displayName || petJson.name || slugSeed,
-      description: petJson.description,
-      kind: petJson.kind || "custom",
-      tags: petJson.tags || petJson.vibes,
-      spritesheetUrl: previewUrl,
-      petJson,
-      frameWidth: positiveNumber(petJson.frameWidth) || Math.round(dimensions.width / 8),
-      frameHeight: positiveNumber(petJson.frameHeight) || Math.round(dimensions.height / 9),
-      addedAt: Date.now(),
-    });
-
-    if (!pet) throw new Error("Could not read pet metadata");
-    await saveCustomPet(pet, spriteFile, petJson);
-    setImportStatus(`Added ${pet.displayName}`);
-    await loadCustomPets();
-    selectPet(state.customPets.find((item) => item.slug === pet.slug) || pet);
-  } catch (error) {
-    setImportStatus(error.message || "Could not import package");
-  } finally {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-  }
+function sourceLabel(pet) {
+  const profile = permissionProfile(pet).label;
+  const attribution = displayAttribution(pet);
+  const source =
+    pet.source === "installed"
+      ? attribution ? `Installed - ${attribution}` : "Installed"
+      : attribution ? `Bundled - ${attribution}` : "Bundled";
+  return [source, profile].filter(Boolean).join(" - ");
 }
 
-async function importFromUrls(petJsonUrl, spriteUrl) {
-  if (!petJsonUrl || !spriteUrl) {
-    setImportStatus("Need both URLs");
-    return;
-  }
-  setImportStatus("Fetching URLs...");
-
-  try {
-    const jsonResponse = await fetch(petJsonUrl);
-    if (!jsonResponse.ok) throw new Error(`pet.json returned ${jsonResponse.status}`);
-
-    const petJson = await jsonResponse.json();
-    let dimensions = { width: 1536, height: 1872 };
-    try {
-      dimensions = await measureImageUrl(spriteUrl);
-    } catch {
-      dimensions = { width: 1536, height: 1872 };
-    }
-    const slugSeed = cleanString(petJson.id || petJson.slug || petJson.displayName);
-    const pet = normalizePet({
-      source: "custom",
-      slug: slugify(slugSeed || `custom-${Date.now()}`),
-      displayName: petJson.displayName || petJson.name || slugSeed,
-      description: petJson.description,
-      kind: petJson.kind || "custom",
-      tags: petJson.tags || petJson.vibes,
-      spritesheetUrl: spriteUrl,
-      petJson,
-      frameWidth: positiveNumber(petJson.frameWidth) || Math.round(dimensions.width / 8),
-      frameHeight: positiveNumber(petJson.frameHeight) || Math.round(dimensions.height / 9),
-      addedAt: Date.now(),
-    });
-
-    if (!pet) throw new Error("Could not read pet metadata");
-    await saveCustomPet(pet, null, petJson, { persistedSpriteUrl: spriteUrl });
-    els.petJsonUrl.value = "";
-    els.spriteUrl.value = "";
-    setImportStatus(`Added ${pet.displayName}`);
-    await loadCustomPets();
-    selectPet(state.customPets.find((item) => item.slug === pet.slug) || pet);
-  } catch (error) {
-    setImportStatus(error.message || "Could not fetch URLs");
-  }
+function displayAttribution(pet) {
+  const value = cleanString(pet?.submittedBy);
+  if (pet?.source === "installed" && value.toLowerCase() === "imported") return "";
+  return value;
 }
 
-async function loadCustomPets() {
-  for (const url of state.activeObjectUrls) URL.revokeObjectURL(url);
-  state.activeObjectUrls.clear();
-
-  const db = await openCustomDb();
-  const records = await readAll(db);
-  state.customPets = records
-    .sort((a, b) => b.addedAt - a.addedAt)
-    .map((record) => {
-      const spritesheetUrl = record.spriteBlob
-        ? URL.createObjectURL(record.spriteBlob)
-        : record.meta.spritesheetUrl;
-      if (record.spriteBlob) state.activeObjectUrls.add(spritesheetUrl);
-      return normalizePet({
-        ...record.meta,
-        source: "custom",
-        spritesheetUrl,
-        petJson: record.petJson,
-      });
-    })
-    .filter(Boolean);
-
-  els.customCount.textContent = String(state.customPets.length);
+function permissionProfileText(pet) {
+  const profile = permissionProfile(pet);
+  return `Pi permissions: ${profile.detail}`;
 }
 
-async function saveCustomPet(pet, spriteBlob, petJson, options = {}) {
-  const db = await openCustomDb();
-  await putRecord(db, {
-    slug: pet.slug,
-    addedAt: pet.addedAt,
-    meta: {
-      slug: pet.slug,
-      displayName: pet.displayName,
-      description: pet.description,
-      kind: pet.kind,
-      submittedBy: pet.submittedBy,
-      tags: pet.tags,
-      spritesheetUrl: options.persistedSpriteUrl || "",
-      frameWidth: pet.frameWidth,
-      frameHeight: pet.frameHeight,
-      states: pet.states,
-    },
-    petJson,
-    spriteBlob,
-  });
-}
-
-async function deleteCustomPet(slug) {
-  const db = await openCustomDb();
-  await deleteRecord(db, slug);
-  await loadCustomPets();
-  if (state.selected?.slug === slug) {
-    state.selected = state.petdexPets.find((pet) => pet.slug === "boba") || state.petdexPets[0] || null;
-    if (state.selected) await selectPet(state.selected);
-  }
-  renderGallery();
-}
-
-function normalizeStates(petJson) {
-  const custom = petJson?.states || petJson?.animations || {};
-  return DEFAULT_STATES.map((fallback) => {
-    const found = findStateConfig(custom, fallback);
-    return {
-      id: fallback.id,
-      label: cleanString(found?.label || found?.name) || fallback.label,
-      row: positiveNumber(found?.row) ?? fallback.row,
-      frames:
-        positiveNumber(found?.frames || found?.frameCount || found?.columns) ??
-        fallback.frames,
-      durationMs:
-        positiveNumber(found?.durationMs || found?.duration || found?.loopMs) ??
-        fallback.durationMs,
-      aliases: fallback.aliases,
-    };
-  });
-}
-
-function findStateConfig(custom, fallback) {
-  if (!custom || typeof custom !== "object") return null;
-  for (const key of fallback.aliases) {
-    if (custom[key] && typeof custom[key] === "object") return custom[key];
-  }
-  return null;
-}
-
-function openCustomDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(CUSTOM_DB, 1);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(CUSTOM_STORE)) {
-        db.createObjectStore(CUSTOM_STORE, { keyPath: "slug" });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-function readAll(db) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(CUSTOM_STORE, "readonly");
-    const request = tx.objectStore(CUSTOM_STORE).getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-function putRecord(db, record) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(CUSTOM_STORE, "readwrite");
-    tx.objectStore(CUSTOM_STORE).put(record);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-function deleteRecord(db, slug) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(CUSTOM_STORE, "readwrite");
-    tx.objectStore(CUSTOM_STORE).delete(slug);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-function findFile(files, predicate) {
-  return files.find(predicate) || null;
-}
-
-function basename(file) {
-  const path = file.webkitRelativePath || file.name || "";
-  return path.split("/").pop() || path;
-}
-
-function stripExtension(name) {
-  return name.replace(/\.[^.]+$/, "");
-}
-
-function measureImageFile(file) {
-  const url = URL.createObjectURL(file);
-  return measureImageUrl(url).finally(() => URL.revokeObjectURL(url));
-}
-
-function measureImageUrl(url) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => {
-      resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    };
-    image.onerror = () => reject(new Error("Spritesheet could not be read"));
-    image.src = url;
-  });
+function permissionProfile(pet) {
+  return PERMISSION_PROFILES[pet?.slug] || PERMISSION_PROFILES.default;
 }
 
 function absolutizeAsset(value, base) {
-  if (/^https?:\/\//i.test(value)) return value;
+  if (!value) return "";
+  if (/^(https?|file|data|blob):/i.test(value)) return value;
   return `${trimSlash(base)}/${String(value).replace(/^\/+/, "")}`;
+}
+
+function absolutizeManifestAsset(value, manifestURL) {
+  if (!value) return "";
+  if (/^(https?|file|data|blob):/i.test(value)) return value;
+  try {
+    return new URL(value, manifestURL).href;
+  } catch {
+    return value;
+  }
 }
 
 function trimSlash(value) {
@@ -752,57 +828,46 @@ function cleanString(value) {
 
 function listStrings(value) {
   if (!Array.isArray(value)) return [];
-  return value.map(cleanString).filter(Boolean).slice(0, 16);
+  return value.map(cleanString).filter(Boolean).slice(0, 12);
 }
 
 function positiveNumber(value) {
   const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : null;
-}
-
-function slugify(value) {
-  const slug = String(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
-  return slug || `custom-${Date.now()}`;
+  return Number.isFinite(number) && number > 0 ? number : null;
 }
 
 function formatCount(value) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-function hashString(value) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-  return hash;
-}
-
 function cssEscapeUrl(value) {
   return String(value).replace(/"/g, '\\"');
 }
 
-function setGalleryStatus(message) {
-  els.galleryStatus.textContent = message;
+function cssSelectorEscape(value) {
+  if (window.CSS?.escape) return CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
-function setImportStatus(message) {
-  els.importStatus.textContent = message;
+function setStatus(message) {
+  els.status.textContent = message;
 }
 
-function flashButton(button, text) {
-  const original = button.textContent;
-  button.textContent = text;
-  setTimeout(() => {
-    button.textContent = original;
-  }, 1200);
-}
-
+// Resize only rescales the existing sprite frame (rAF-debounced); rebuilding
+// the element would re-decode the sheet and restart the animation.
 window.addEventListener("resize", () => {
-  if (state.selected) renderSelected();
+  if (!state.selected) return;
+  cancelAnimationFrame(resizeFrame);
+  resizeFrame = requestAnimationFrame(() => {
+    const frame = els.spritePreview.querySelector(".pet-sprite-frame");
+    if (!frame || !state.selected) return;
+    const scale = spriteScale(state.selected.frameWidth || 192, state.selected.frameHeight || 208);
+    frame.style.setProperty("--scale", String(scale));
+  });
+});
+
+// The window outlives close (it is only hidden), so pause the idle animation
+// whenever the page is not visible to keep the web process quiet.
+document.addEventListener("visibilitychange", () => {
+  document.documentElement.classList.toggle("page-hidden", document.visibilityState !== "visible");
 });

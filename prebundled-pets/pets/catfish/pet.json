@@ -1,0 +1,8 @@
+{
+  "id": "catfish",
+  "slug": "catfish",
+  "displayName": "Catfish",
+  "description": "A gray tabby cat-headed fish pet with a naturally fused fish body, rendered as a pixel-art Codex pet.",
+  "kind": "creature",
+  "spritesheetPath": "sprite.webp"
+}

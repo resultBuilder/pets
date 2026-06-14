@@ -1,0 +1,60 @@
+{
+  "steps": [
+    {
+      "method": "session.upsert",
+      "payload": {
+        "sessionId": "s1",
+        "cwd": "/repo",
+        "title": "Feature",
+        "status": "thinking",
+        "safeSummary": "planning"
+      }
+    },
+    {
+      "method": "session.upsert",
+      "payload": {
+        "sessionId": "s1",
+        "cwd": "/repo",
+        "title": "Feature",
+        "status": "running",
+        "safeSummary": "agent running"
+      }
+    },
+    {
+      "method": "session.upsert",
+      "payload": {
+        "sessionId": "s2",
+        "status": "failed",
+        "safeSummary": "provider HTTP 500"
+      }
+    },
+    {
+      "method": "session.remove",
+      "payload": {
+        "sessionId": "s2"
+      }
+    }
+  ],
+  "snapshot": {
+    "attention": "running",
+    "sessions": [
+      {
+        "id": "s1",
+        "cwd": "/repo",
+        "title": "Feature",
+        "status": "running",
+        "safeSummary": "agent running"
+      }
+    ],
+    "pendingApprovals": [],
+    "installedPets": [],
+    "catalogs": {},
+    "presentation": {
+      "stateId": "running",
+      "bubble": "Pi running: agent running",
+      "activeSessionIds": [
+        "s1"
+      ]
+    }
+  }
+}

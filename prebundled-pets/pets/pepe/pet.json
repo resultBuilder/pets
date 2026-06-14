@@ -1,0 +1,7 @@
+{
+  "description" : "A compact Codex-style green frog pet in a plain blue shirt.",
+  "displayName" : "Pepe",
+  "id" : "pepe",
+  "spritesheet" : "spritesheet.webp",
+  "spritesheetPath" : "spritesheet.webp"
+}

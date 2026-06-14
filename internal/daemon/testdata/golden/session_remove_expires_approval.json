@@ -1,0 +1,50 @@
+{
+  "steps": [
+    {
+      "method": "session.upsert",
+      "payload": {
+        "sessionId": "s1",
+        "status": "running",
+        "safeSummary": "agent running"
+      }
+    },
+    {
+      "method": "approval.request",
+      "background": true,
+      "payload": {
+        "approvalId": "s1:tool-1",
+        "sessionId": "s1",
+        "toolCallId": "tool-1",
+        "toolName": "bash",
+        "commandSummary": "rm -rf build",
+        "risk": "high",
+        "timeoutMillis": 5000
+      },
+      "expectDecision": {
+        "approvalId": "s1:tool-1",
+        "decision": "expired",
+        "reason": "session terminated"
+      }
+    },
+    {
+      "waitPendingApprovals": 1
+    },
+    {
+      "method": "session.remove",
+      "payload": {
+        "sessionId": "s1"
+      }
+    }
+  ],
+  "snapshot": {
+    "attention": "idle",
+    "sessions": [],
+    "pendingApprovals": [],
+    "installedPets": [],
+    "catalogs": {},
+    "presentation": {
+      "stateId": "idle",
+      "activeSessionIds": []
+    }
+  }
+}

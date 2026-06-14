@@ -1,0 +1,13 @@
+{
+  "name": "codex-pets",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:go": "go test ./...",
+    "test:pi-extension": "node --experimental-strip-types --test pi-extension/*.test.ts",
+    "test:browser-smoke": "node scripts/browser-smoke.mjs",
+    "test:macos-gui-smoke": "node scripts/macos-gui-smoke.mjs",
+    "dump:petdex": "node scripts/dump-petdex.mjs",
+    "test": "npm run test:go && npm run test:pi-extension"
+  }
+}

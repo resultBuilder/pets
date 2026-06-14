@@ -70,13 +70,14 @@ enum PetLoadError: Error, LocalizedError {
 }
 
 final class PetStore {
-    private let fileManager = FileManager.default
+    private let fileManager: FileManager
     let appSupport: URL
     let importedPetsRoot: URL
     let runtimeRoot: URL
 
-    init() {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    init(appSupport explicitAppSupport: URL? = nil, fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        let base = explicitAppSupport ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CodexPets", isDirectory: true)
         self.appSupport = base
         self.importedPetsRoot = base.appendingPathComponent("Pets", isDirectory: true)
@@ -85,151 +86,49 @@ final class PetStore {
         try? fileManager.createDirectory(at: runtimeRoot, withIntermediateDirectories: true)
     }
 
-    func scan() -> [PetPackage] {
-        let home = fileManager.homeDirectoryForCurrentUser
-        let roots: [(URL, PetSource)] = [
-            (importedPetsRoot, .app),
-            (home.appendingPathComponent(".petdex/pets", isDirectory: true), .petdex),
-            (home.appendingPathComponent(".codex/pets", isDirectory: true), .codex),
-        ]
-
-        var pets: [PetPackage] = []
-        var seenDirectories = Set<String>()
-        for (root, source) in roots {
-            guard let children = try? fileManager.contentsOfDirectory(
-                at: root,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            ) else {
-                continue
-            }
-
-            for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                guard isDirectory(child), !seenDirectories.contains(child.path) else { continue }
-                seenDirectories.insert(child.path)
-                if let pet = try? loadPet(at: child, source: source) {
-                    pets.append(pet)
-                }
-            }
+    func bundledDefaultPetDirectory(slug: String) -> URL? {
+        var candidates: [URL] = []
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(
+                resourceURL
+                    .appendingPathComponent("PetdexBrowser", isDirectory: true)
+                    .appendingPathComponent("prebundled-pets", isDirectory: true)
+                    .appendingPathComponent("pets", isDirectory: true)
+                    .appendingPathComponent(slug, isDirectory: true)
+            )
         }
-
-        return pets.sorted {
-            if $0.source != $1.source { return sourceRank($0.source) < sourceRank($1.source) }
-            return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-        }
-    }
-
-    func importPetFolder(_ folder: URL) throws -> PetPackage {
-        let loaded = try loadPet(at: folder, source: .app)
-        let destinationName = uniqueFolderName(slugify(loaded.slug))
-        let destination = importedPetsRoot.appendingPathComponent(destinationName, isDirectory: true)
-        try fileManager.copyItem(at: folder, to: destination)
-        return try loadPet(at: destination, source: .app)
-    }
-
-    func loadPet(at directory: URL, source: PetSource) throws -> PetPackage {
-        let manifestURL = directory.appendingPathComponent("pet.json")
-        guard fileManager.fileExists(atPath: manifestURL.path) else { throw PetLoadError.missingManifest }
-
-        let data = try Data(contentsOf: manifestURL)
-        guard
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            throw PetLoadError.invalidManifest
-        }
-
-        let slugSeed = string(json["slug"]) ?? string(json["id"]) ?? directory.lastPathComponent
-        let slug = slugify(slugSeed)
-        let displayName = string(json["displayName"]) ?? string(json["name"]) ?? slugSeed
-        let detail = string(json["description"]) ?? "Animated Codex-compatible pet."
-        let kind = string(json["kind"]) ?? "pet"
-        let spritesheetURL = try resolveSpritesheet(in: directory, manifest: json)
-        let frameWidth = int(json["frameWidth"]) ?? 192
-        let frameHeight = int(json["frameHeight"]) ?? 208
-
-        return PetPackage(
-            slug: slug,
-            displayName: displayName,
-            detail: detail,
-            kind: kind,
-            source: source,
-            directory: directory,
-            spritesheet: spritesheetURL,
-            frameWidth: frameWidth,
-            frameHeight: frameHeight,
-            states: PetAnimationState.defaults
+        candidates.append(
+            URL(fileURLWithPath: fileManager.currentDirectoryPath)
+                .appendingPathComponent("prebundled-pets", isDirectory: true)
+                .appendingPathComponent("pets", isDirectory: true)
+                .appendingPathComponent(slug, isDirectory: true)
         )
-    }
-
-    private func resolveSpritesheet(in directory: URL, manifest: [String: Any]) throws -> URL {
-        var names: [String] = []
-        if let raw = string(manifest["spritesheetPath"]) ?? string(manifest["spritesheet"]) {
-            names.append(raw)
-        }
-        names.append(contentsOf: [
-            "spritesheet.webp",
-            "spritesheet.png",
-            "sprite.webp",
-            "sprite.png",
-        ])
-
-        for name in names {
-            let candidate = directory.appendingPathComponent(name)
-            if fileManager.fileExists(atPath: candidate.path) {
-                return candidate
-            }
-        }
-
-        throw PetLoadError.missingSpritesheet
-    }
-
-    private func uniqueFolderName(_ base: String) -> String {
-        let cleanBase = base.isEmpty ? "custom-pet" : base
-        var candidate = cleanBase
-        var index = 2
-        while fileManager.fileExists(atPath: importedPetsRoot.appendingPathComponent(candidate).path) {
-            candidate = "\(cleanBase)-\(index)"
-            index += 1
-        }
-        return candidate
-    }
-
-    private func sourceRank(_ source: PetSource) -> Int {
-        switch source {
-        case .app: return 0
-        case .petdex: return 1
-        case .codex: return 2
-        }
-    }
-
-    private func isDirectory(_ url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        return candidates.first { fileManager.fileExists(atPath: $0.appendingPathComponent("pet.json").path) }
     }
 }
 
-func slugify(_ value: String) -> String {
-    let folded = value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-    let allowed = folded.map { character -> Character in
-        if character.isLetter || character.isNumber { return Character(character.lowercased()) }
-        return "-"
+// petPackage maps a daemon-provided ref onto the render-side package. The
+// daemon already parsed and validated pet.json; native code never does.
+func petPackage(from ref: DaemonPetRef) -> PetPackage? {
+    guard
+        let slug = ref.slug, !slug.isEmpty,
+        let path = ref.path, !path.isEmpty,
+        let spriteName = ref.spritesheetPath, !spriteName.isEmpty,
+        let source = PetSource(rawValue: ref.source)
+    else {
+        return nil
     }
-    var slug = String(allowed)
-    while slug.contains("--") {
-        slug = slug.replacingOccurrences(of: "--", with: "-")
-    }
-    slug = slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    return slug.isEmpty ? "custom-pet" : String(slug.prefix(64))
-}
-
-private func string(_ value: Any?) -> String? {
-    guard let text = value as? String else { return nil }
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
-}
-
-private func int(_ value: Any?) -> Int? {
-    if let value = value as? Int { return value > 0 ? value : nil }
-    if let value = value as? Double { return value > 0 ? Int(value) : nil }
-    if let text = value as? String, let parsed = Int(text), parsed > 0 { return parsed }
-    return nil
+    let directory = URL(fileURLWithPath: path, isDirectory: true)
+    return PetPackage(
+        slug: slug,
+        displayName: ref.displayName,
+        detail: ref.description ?? "Animated Codex-compatible pet.",
+        kind: ref.kind ?? "pet",
+        source: source,
+        directory: directory,
+        spritesheet: directory.appendingPathComponent(spriteName),
+        frameWidth: ref.frameWidth ?? 192,
+        frameHeight: ref.frameHeight ?? 208,
+        states: PetAnimationState.defaults
+    )
 }

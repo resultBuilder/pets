@@ -3,183 +3,63 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      name="description"
-      content="Browse Codex pets from Petdex and add local custom Codex pet packages."
-    />
-    <title>Codex Pets</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Choose a Codex pet from Petdex." />
+    <title>Petdex</title>
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div id="app-shell">
-      <header class="topbar">
-        <a class="brand" href="/" aria-label="Codex Pets home">
-          <span class="brand-mark" aria-hidden="true">CP</span>
-          <span>
-            <strong>Codex Pets</strong>
-            <small>Petdex viewer</small>
-          </span>
-        </a>
-
-        <form id="manifest-form" class="manifest-form">
-          <label class="sr-only" for="manifest-url">Manifest URL</label>
+    <main class="petdex-shell" aria-label="Petdex">
+      <aside class="source-pane" aria-label="Pets">
+        <div class="search-wrap">
           <input
-            id="manifest-url"
-            name="manifestUrl"
-            type="url"
+            id="search"
+            type="search"
+            autocomplete="off"
             spellcheck="false"
-            value="https://assets.petdex.dev/manifests/petdex-v1.json"
+            placeholder="Search"
+            aria-label="Search pets"
           />
-          <button type="submit" class="icon-button text-button" title="Load manifest">
-            Load
-          </button>
-        </form>
-      </header>
+        </div>
 
-      <main class="workspace">
-        <aside class="control-rail" aria-label="Pet controls">
-          <section class="panel search-panel">
-            <div class="field-with-icon">
-              <span aria-hidden="true">/</span>
-              <label class="sr-only" for="pet-search">Search pets</label>
-              <input
-                id="pet-search"
-                type="search"
-                autocomplete="off"
-                placeholder="Search name, slug, author"
-              />
-            </div>
+        <p id="status" class="status-line" role="status">Loading bundled pets...</p>
 
-            <div class="segmented-control" role="tablist" aria-label="Pet source">
-              <button class="segment is-active" type="button" data-source="all">
-                All
-              </button>
-              <button class="segment" type="button" data-source="petdex">
-                Petdex
-              </button>
-              <button class="segment" type="button" data-source="custom">
-                Custom
-              </button>
-            </div>
-          </section>
+        <div id="pet-list" class="pet-list" role="listbox" aria-label="Available pets"></div>
+      </aside>
 
-          <section class="panel import-panel">
-            <div class="panel-heading">
-              <h2>Add Custom</h2>
-              <span id="custom-count">0</span>
-            </div>
+      <section class="detail-pane" aria-label="Selected pet">
+        <div class="preview-region">
+          <div id="sprite-preview" class="sprite-preview" aria-live="polite"></div>
+        </div>
 
-            <div class="import-actions">
-              <label class="file-button">
-                <input id="folder-input" type="file" webkitdirectory multiple />
-                Folder
-              </label>
-              <label class="file-button">
-                <input
-                  id="files-input"
-                  type="file"
-                  accept=".json,image/webp,image/png"
-                  multiple
-                />
-                Files
-              </label>
-            </div>
-
-            <form id="url-import-form" class="url-import">
-              <label class="sr-only" for="pet-json-url">pet.json URL</label>
-              <input
-                id="pet-json-url"
-                type="url"
-                placeholder="pet.json URL"
-                spellcheck="false"
-              />
-              <label class="sr-only" for="sprite-url">Spritesheet URL</label>
-              <input
-                id="sprite-url"
-                type="url"
-                placeholder="spritesheet URL"
-                spellcheck="false"
-              />
-              <button type="submit" class="text-button">Add URL</button>
-            </form>
-
-            <p id="import-status" class="status-line" role="status"></p>
-          </section>
-
-          <section class="panel stat-panel" aria-label="Gallery counts">
-            <div>
-              <strong id="manifest-total">0</strong>
-              <span>Petdex</span>
-            </div>
-            <div>
-              <strong id="visible-total">0</strong>
-              <span>Showing</span>
-            </div>
-          </section>
-        </aside>
-
-        <section class="stage" aria-label="Selected pet">
-          <div class="stage-copy">
-            <div class="eyebrow-row">
-              <span id="selected-source">Petdex</span>
-              <span id="selected-kind">creature</span>
-            </div>
-            <h1 id="selected-name">Boba</h1>
-            <p id="selected-description">
-              A tiny otter sipping bubble tea while keeping you company in Codex.
-            </p>
-            <div id="selected-tags" class="tag-row"></div>
-            <div class="command-row">
-              <code id="install-command">npx petdex install boba</code>
-              <button id="copy-command" class="icon-button" type="button" title="Copy">
-                Copy
-              </button>
-              <a id="open-petdex" class="text-link" href="https://petdex.dev" target="_blank" rel="noreferrer">
-                Petdex
-              </a>
-            </div>
+        <footer class="detail-footer">
+          <div class="pet-copy">
+            <p id="source-label" class="source-label">Petdex</p>
+            <h1 id="pet-name">Petdex</h1>
+            <p id="pet-description">Choose a pet to preview it.</p>
+            <p id="pet-permission-profile" class="permission-profile"></p>
+            <p id="pi-extension-status" class="pi-extension-status">Pi extension status unavailable</p>
           </div>
-
-          <div class="stage-pet">
-            <div id="selected-sprite" class="selected-sprite" aria-live="polite"></div>
-            <div id="state-tabs" class="state-tabs" aria-label="Animation state"></div>
+          <div class="action-row" aria-label="Actions">
+            <button id="install-pi-action" class="secondary-action" type="button" disabled>
+              Install to Pi
+            </button>
+            <button id="uninstall-pi-action" class="secondary-action" type="button" hidden disabled>
+              Uninstall Pi
+            </button>
+            <button id="primary-action" type="button" disabled>Use</button>
           </div>
-        </section>
+        </footer>
+      </section>
+    </main>
 
-        <section class="gallery-wrap" aria-label="Pet gallery">
-          <div class="gallery-toolbar">
-            <div>
-              <h2>Gallery</h2>
-              <p id="gallery-status" class="status-line">Loading Petdex...</p>
-            </div>
-            <div class="toolbar-actions">
-              <button id="shuffle-pet" class="icon-button text-button" type="button">
-                Shuffle
-              </button>
-              <button id="refresh-manifest" class="icon-button text-button" type="button">
-                Refresh
-              </button>
-            </div>
-          </div>
-
-          <div id="pet-grid" class="pet-grid"></div>
-          <button id="load-more" class="load-more" type="button">Load More</button>
-        </section>
-      </main>
-    </div>
-
-    <template id="pet-card-template">
-      <article class="pet-card">
-        <button class="pet-card-button" type="button">
-          <span class="pet-card-sprite"></span>
-          <span class="pet-card-body">
-            <strong></strong>
-            <small></small>
-          </span>
-        </button>
-      </article>
+    <template id="pet-row-template">
+      <button class="pet-row" type="button" role="option">
+        <span class="pet-row-name"></span>
+        <span class="pet-row-meta"></span>
+      </button>
     </template>
 
-    <script type="module" src="/app.js"></script>
+    <script defer src="app.js"></script>
   </body>
 </html>
